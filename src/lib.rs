@@ -76,6 +76,9 @@ type CargoToml = HashMap<String, toml::Value>;
 /// - `Ok(RENAMED)` if the crate was found, but is renamed in the `Cargo.toml`. `RENAMED` will be
 /// the renamed name.
 /// - `Err` if an error occurred.
+///
+/// The returned crate name is sanitized in such a way that it is a valid rust identifier. Thus,
+/// it is ready to be used in `extern crate` as identifier.
 pub fn crate_name(orig_name: &'static str) -> Result<String, String> {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR")
         .map_err(|_| "Could not find `CARGO_MANIFEST_DIR` env variable.")?;
@@ -88,7 +91,12 @@ pub fn crate_name(orig_name: &'static str) -> Result<String, String> {
 
     let cargo_toml = open_cargo_toml(&cargo_toml_path)?;
 
-    extract_crate_name(orig_name, cargo_toml, &cargo_toml_path)
+    extract_crate_name(orig_name, cargo_toml, &cargo_toml_path).map(sanitize_crate_name)
+}
+
+/// Make sure that the given crate name is a valid rust identifier.
+fn sanitize_crate_name(name: String) -> String {
+    name.replace("-", "_")
 }
 
 /// Open the given `Cargo.toml` and parse it into a hashmap.
