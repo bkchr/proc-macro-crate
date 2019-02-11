@@ -28,11 +28,14 @@ name of `crate_name` is either the given original rename (crate not renamed) or 
 
 ```rust
 use quote::quote;
+use syn::Ident;
+use proc_macro2::Span;
 use proc_macro_crate::crate_name;
 
 fn import_my_crate() {
     let name = crate_name("my-crate").expect("my-crate is present in `Cargo.toml`");
-    quote!( extern crate #name as my_crate_known_name );
+    let ident = Ident::new(&name, Span::call_site());
+    quote!( extern crate #ident as my_crate_known_name );
 }
 
 ```
