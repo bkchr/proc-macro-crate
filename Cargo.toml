@@ -1,0 +1,20 @@
+[package]
+name = "proc-macro-crate"
+version = "0.1.0"
+authors = ["Bastian Köcher <git@kchr.de>"]
+edition = "2018"
+categories = [ "proc-macro" ]
+documentation = "https://docs.rs/proc-macro-crate"
+repository = "https://github.com/bkchr/proc-macro-crate"
+keywords = [ "macro-rules", "$crate", "macro", "proc-macro" ]
+license = "Apache-2.0/MIT"
+description = """
+Replacement for `$crate` in proc-macros
+"""
+readme = "./README.md"
+
+[dependencies]
+toml = "0.4.10"
+
+[dev-dependencies]
+quote = "0.6"
