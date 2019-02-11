@@ -79,7 +79,7 @@ type CargoToml = HashMap<String, toml::Value>;
 ///
 /// The returned crate name is sanitized in such a way that it is a valid rust identifier. Thus,
 /// it is ready to be used in `extern crate` as identifier.
-pub fn crate_name(orig_name: &'static str) -> Result<String, String> {
+pub fn crate_name(orig_name: &str) -> Result<String, String> {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR")
         .map_err(|_| "Could not find `CARGO_MANIFEST_DIR` env variable.")?;
 
@@ -110,7 +110,7 @@ fn open_cargo_toml(path: &Path) -> Result<CargoToml, String> {
 }
 
 /// Crate the not found error.
-fn create_not_found_err(orig_name: &'static str, path: &Display) -> Result<String, String> {
+fn create_not_found_err(orig_name: &str, path: &Display) -> Result<String, String> {
     Err(format!(
         "Could not find `{}` in `dependencies` or `dev-dependencies` in `{}`!",
         orig_name,
@@ -124,7 +124,7 @@ fn create_not_found_err(orig_name: &'static str, path: &Display) -> Result<Strin
 /// Returns `Ok(orig_name)` if the crate is not renamed in the `Cargo.toml` or otherwise
 /// the renamed identifier.
 fn extract_crate_name(
-    orig_name: &'static str,
+    orig_name: &str,
     mut cargo_toml: CargoToml,
     cargo_toml_path: &Path,
 ) -> Result<String, String> {
@@ -151,7 +151,7 @@ fn extract_crate_name(
 ///
 /// Returns `Some(orig_name)` if the crate is not renamed in the `Cargo.toml` or otherwise
 /// the renamed identifier.
-fn extract_crate_name_from_deps(orig_name: &'static str, deps: Table) -> Option<String> {
+fn extract_crate_name_from_deps(orig_name: &str, deps: Table) -> Option<String> {
     for (key, value) in deps.into_iter() {
         let renamed = value
             .try_into::<Table>()
