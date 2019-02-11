@@ -1,15 +1,15 @@
 [package]
 name = "proc-macro-crate"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Bastian Köcher <git@kchr.de>"]
 edition = "2018"
-categories = [ "proc-macro" ]
+categories = [ "development-tools::procedural-macro-helpers" ]
 documentation = "https://docs.rs/proc-macro-crate"
 repository = "https://github.com/bkchr/proc-macro-crate"
-keywords = [ "macro-rules", "$crate", "macro", "proc-macro" ]
+keywords = [ "macro-rules", "crate", "macro", "proc-macro" ]
 license = "Apache-2.0/MIT"
 description = """
-Replacement for `$crate` in proc-macros
+Replacement for crate (macro_rules keyword) in proc-macros
 """
 readme = "./README.md"
 
