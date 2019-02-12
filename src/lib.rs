@@ -109,7 +109,7 @@ fn open_cargo_toml(path: &Path) -> Result<CargoToml, String> {
     toml::from_str(&content).map_err(|e| format!("{:?}", e))
 }
 
-/// Crate the not found error.
+/// Create the not found error.
 fn create_not_found_err(orig_name: &str, path: &Display) -> Result<String, String> {
     Err(format!(
         "Could not find `{}` in `dependencies` or `dev-dependencies` in `{}`!",
