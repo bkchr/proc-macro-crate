@@ -14,7 +14,7 @@ Replacement for crate (macro_rules keyword) in proc-macros
 readme = "./README.md"
 
 [dependencies]
-toml = "0.4.10"
+toml = "0.5.0"
 
 [dev-dependencies]
 quote = "0.6"

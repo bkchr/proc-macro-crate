@@ -54,10 +54,10 @@ at your option.
 use std::{
     collections::HashMap,
     env,
+    fmt::Display,
     fs::File,
     io::Read,
     path::{Path, PathBuf},
-    fmt::Display,
 };
 
 use toml::{self, value::Table};
@@ -113,8 +113,7 @@ fn open_cargo_toml(path: &Path) -> Result<CargoToml, String> {
 fn create_not_found_err(orig_name: &str, path: &Display) -> Result<String, String> {
     Err(format!(
         "Could not find `{}` in `dependencies` or `dev-dependencies` in `{}`!",
-        orig_name,
-        path
+        orig_name, path
     ))
 }
 
@@ -128,23 +127,36 @@ fn extract_crate_name(
     mut cargo_toml: CargoToml,
     cargo_toml_path: &Path,
 ) -> Result<String, String> {
-    if let Some(name) = cargo_toml
-        .remove("dependencies")
-        .and_then(|v| v.try_into::<Table>().ok())
-        .and_then(|t| extract_crate_name_from_deps(orig_name, t))
+    if let Some(name) = ["dependencies", "dev-dependencies"]
+        .iter()
+        .find_map(|k| search_crate_at_key(k, orig_name, &mut cargo_toml))
     {
         return Ok(name);
     }
 
+    // Start searching `target.xy.dependencies`
     if let Some(name) = cargo_toml
-        .remove("dev-dependencies")
-        .and_then(|v| v.try_into::<Table>().ok())
-        .and_then(|t| extract_crate_name_from_deps(orig_name, t))
+        .remove("target")
+        .and_then(|t| t.try_into::<Table>().ok())
+        .and_then(|t| {
+            t.values()
+                .filter_map(|v| v.as_table())
+                .filter_map(|t| t.get("dependencies").and_then(|t| t.as_table()))
+                .find_map(|t| extract_crate_name_from_deps(orig_name, t.clone()))
+        })
     {
         return Ok(name);
     }
 
     create_not_found_err(orig_name, &cargo_toml_path.display())
+}
+
+/// Search the `orig_name` crate at the given `key` in `cargo_toml`.
+fn search_crate_at_key(key: &str, orig_name: &str, cargo_toml: &mut CargoToml) -> Option<String> {
+    cargo_toml
+        .remove(key)
+        .and_then(|v| v.try_into::<Table>().ok())
+        .and_then(|t| extract_crate_name_from_deps(orig_name, t))
 }
 
 /// Extract the crate name from the given dependencies.
@@ -240,5 +252,23 @@ mod tests {
             serde = "1.0"
         "#,
         create_not_found_err("my_crate", &"test-path"),
+    }
+
+    create_test! {
+        target_dependency,
+        r#"
+            [target.'cfg(target_os="android")'.dependencies]
+            my_crate = "0.1"
+        "#,
+        Ok("my_crate".into()),
+    }
+
+    create_test! {
+        target_dependency2,
+        r#"
+            [target.x86_64-pc-windows-gnu.dependencies]
+            my_crate = "0.1"
+        "#,
+        Ok("my_crate".into()),
     }
 }
