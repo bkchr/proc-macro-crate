@@ -110,7 +110,7 @@ fn open_cargo_toml(path: &Path) -> Result<CargoToml, String> {
 }
 
 /// Create the not found error.
-fn create_not_found_err(orig_name: &str, path: &Display) -> Result<String, String> {
+fn create_not_found_err(orig_name: &str, path: &dyn Display) -> Result<String, String> {
     Err(format!(
         "Could not find `{}` in `dependencies` or `dev-dependencies` in `{}`!",
         orig_name, path
