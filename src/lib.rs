@@ -127,6 +127,14 @@ fn extract_crate_name(
     mut cargo_toml: CargoToml,
     cargo_toml_path: &Path,
 ) -> Result<String, String> {
+    if let Some(toml::Value::Table(t)) = cargo_toml.get("package") {
+        if let Some(toml::Value::String(s)) = t.get("name") {
+            if s == orig_name {
+                return Ok("crate".to_string())
+            }
+        }
+    }
+
     if let Some(name) = ["dependencies", "dev-dependencies"]
         .iter()
         .find_map(|k| search_crate_at_key(k, orig_name, &mut cargo_toml))
@@ -270,5 +278,15 @@ mod tests {
             my_crate = "0.1"
         "#,
         Ok("my_crate".into()),
+    }
+
+
+    create_test! {
+        own_crate,
+        r#"
+            [package]
+            name = "my_crate"
+        "#,
+        Ok("crate".into()),
     }
 }
