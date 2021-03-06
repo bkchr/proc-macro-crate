@@ -20,8 +20,7 @@ name of the crate that should be imported.
 This crate provides a way to get the name of a crate, even if it renamed in `Cargo.toml`. For this
 purpose a single function `crate_name` is provided. This function needs to be called in the context
 of a proc-macro with the name of the desired crate. `CARGO_MANIFEST_DIR` will be used to find the
-current active `Cargo.toml` and this `Cargo.toml` is searched for the desired crate. The returned
-name of `crate_name` is either the given original rename (crate not renamed) or the renamed name.
+current active `Cargo.toml` and this `Cargo.toml` is searched for the desired crate.
 
 ## Example
 
@@ -29,12 +28,18 @@ name of `crate_name` is either the given original rename (crate not renamed) or 
 use quote::quote;
 use syn::Ident;
 use proc_macro2::Span;
-use proc_macro_crate::crate_name;
+use proc_macro_crate::{crate_name, FoundCrate};
 
 fn import_my_crate() {
-    let name = crate_name("my-crate").expect("my-crate is present in `Cargo.toml`");
-    let ident = Ident::new(&name, Span::call_site());
-    quote!( extern crate #ident as my_crate_known_name );
+    let found_crate = crate_name("my-crate").expect("my-crate is present in `Cargo.toml`");
+
+    match found_crate {
+        FoundCrate::Itself => quote!( crate::Something ),
+        FoundCrate::Name(name) => {
+            let ident = Ident::new(&name, Span::call_site());
+            quote!( #ident::Something )
+        }
+    };
 }
 
 # fn main() {}
@@ -54,15 +59,38 @@ at your option.
 use std::{
     collections::HashMap,
     env,
-    fmt::Display,
     fs::File,
-    io::Read,
+    io::{self, Read},
     path::{Path, PathBuf},
 };
 
 use toml::{self, value::Table};
 
 type CargoToml = HashMap<String, toml::Value>;
+
+/// Error type used by this crate.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Could not find `Cargo.toml` in manifest dir: `{0}`.")]
+    NotFound(PathBuf),
+    #[error("`CARGO_MANIFEST_DIR` env variable not set.")]
+    CargoManifestDirNotSet,
+    #[error("Could not read `{path}`.")]
+    CouldNotRead { path: PathBuf, source: io::Error },
+    #[error("Invalid toml file.")]
+    InvalidToml { source: toml::de::Error },
+    #[error("Could not find `{crate_name}` in `dependencies` or `dev-dependencies` in `{path}`!")]
+    CrateNotFound { crate_name: String, path: PathBuf },
+}
+
+/// The crate as found by [`crate_name`].
+#[derive(Debug, PartialEq, Clone, Eq)]
+pub enum FoundCrate {
+    /// The searched crate is this crate itself.
+    Itself,
+    /// The searched crate was found with this name.
+    Name(String),
+}
 
 /// Find the crate name for the given `orig_name` in the current `Cargo.toml`.
 ///
@@ -79,19 +107,19 @@ type CargoToml = HashMap<String, toml::Value>;
 ///
 /// The returned crate name is sanitized in such a way that it is a valid rust identifier. Thus,
 /// it is ready to be used in `extern crate` as identifier.
-pub fn crate_name(orig_name: &str) -> Result<String, String> {
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR")
-        .map_err(|_| "Could not find `CARGO_MANIFEST_DIR` env variable.")?;
+pub fn crate_name(orig_name: &str) -> Result<FoundCrate, Error> {
+    let manifest_dir =
+        PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|_| Error::CargoManifestDirNotSet)?);
 
-    let cargo_toml_path = PathBuf::from(manifest_dir).join("Cargo.toml");
+    let cargo_toml_path = manifest_dir.join("Cargo.toml");
 
     if !cargo_toml_path.exists() {
-        return Err(format!("`{}` does not exist.", cargo_toml_path.display()));
+        return Err(Error::NotFound(manifest_dir.into()));
     }
 
     let cargo_toml = open_cargo_toml(&cargo_toml_path)?;
 
-    extract_crate_name(orig_name, cargo_toml, &cargo_toml_path).map(sanitize_crate_name)
+    extract_crate_name(orig_name, cargo_toml, &cargo_toml_path)
 }
 
 /// Make sure that the given crate name is a valid rust identifier.
@@ -100,21 +128,19 @@ fn sanitize_crate_name(name: String) -> String {
 }
 
 /// Open the given `Cargo.toml` and parse it into a hashmap.
-fn open_cargo_toml(path: &Path) -> Result<CargoToml, String> {
+fn open_cargo_toml(path: &Path) -> Result<CargoToml, Error> {
     let mut content = String::new();
     File::open(path)
-        .map_err(|e| format!("Could not open `{}`: {:?}", path.display(), e))?
+        .map_err(|e| Error::CouldNotRead {
+            source: e,
+            path: path.into(),
+        })?
         .read_to_string(&mut content)
-        .map_err(|e| format!("Could not read `{}` to string: {:?}", path.display(), e))?;
-    toml::from_str(&content).map_err(|e| format!("{:?}", e))
-}
-
-/// Create the not found error.
-fn create_not_found_err(orig_name: &str, path: &dyn Display) -> Result<String, String> {
-    Err(format!(
-        "Could not find `{}` in `dependencies` or `dev-dependencies` in `{}`!",
-        orig_name, path
-    ))
+        .map_err(|e| Error::CouldNotRead {
+            source: e,
+            path: path.into(),
+        })?;
+    toml::from_str(&content).map_err(|e| Error::InvalidToml { source: e })
 }
 
 /// Extract the crate name for the given `orig_name` from the given `Cargo.toml` by checking the
@@ -126,11 +152,11 @@ fn extract_crate_name(
     orig_name: &str,
     mut cargo_toml: CargoToml,
     cargo_toml_path: &Path,
-) -> Result<String, String> {
+) -> Result<FoundCrate, Error> {
     if let Some(toml::Value::Table(t)) = cargo_toml.get("package") {
         if let Some(toml::Value::String(s)) = t.get("name") {
             if s == orig_name {
-                return Ok("crate".to_string())
+                return Ok(FoundCrate::Itself);
             }
         }
     }
@@ -139,7 +165,7 @@ fn extract_crate_name(
         .iter()
         .find_map(|k| search_crate_at_key(k, orig_name, &mut cargo_toml))
     {
-        return Ok(name);
+        return Ok(FoundCrate::Name(sanitize_crate_name(name)));
     }
 
     // Start searching `target.xy.dependencies`
@@ -153,10 +179,13 @@ fn extract_crate_name(
                 .find_map(|t| extract_crate_name_from_deps(orig_name, t.clone()))
         })
     {
-        return Ok(name);
+        return Ok(FoundCrate::Name(sanitize_crate_name(name)));
     }
 
-    create_not_found_err(orig_name, &cargo_toml_path.display())
+    Err(Error::CrateNotFound {
+        crate_name: orig_name.into(),
+        path: cargo_toml_path.into(),
+    })
 }
 
 /// Search the `orig_name` crate at the given `key` in `cargo_toml`.
@@ -196,14 +225,17 @@ mod tests {
         (
             $name:ident,
             $cargo_toml:expr,
-            $result:expr,
+            $( $result:tt )*
         ) => {
             #[test]
             fn $name() {
                 let cargo_toml = toml::from_str($cargo_toml).expect("Parses `Cargo.toml`");
                 let path = PathBuf::from("test-path");
 
-                assert_eq!($result, extract_crate_name("my_crate", cargo_toml, &path));
+                match extract_crate_name("my_crate", cargo_toml, &path) {
+                    $( $result )* => (),
+                    o => panic!("Invalid result: {:?}", o),
+                }
             }
         };
     }
@@ -214,7 +246,7 @@ mod tests {
             [dependencies]
             my_crate = "0.1"
         "#,
-        Ok("my_crate".into()),
+        Ok(FoundCrate::Name(name)) if name == "my_crate"
     }
 
     create_test! {
@@ -223,7 +255,7 @@ mod tests {
             [dev-dependencies]
             my_crate = "0.1"
         "#,
-        Ok("my_crate".into()),
+        Ok(FoundCrate::Name(name)) if name == "my_crate"
     }
 
     create_test! {
@@ -232,7 +264,7 @@ mod tests {
             [dependencies]
             cool = { package = "my_crate", version = "0.1" }
         "#,
-        Ok("cool".into()),
+        Ok(FoundCrate::Name(name)) if name == "cool"
     }
 
     create_test! {
@@ -242,7 +274,7 @@ mod tests {
             package = "my_crate"
             version = "0.1"
         "#,
-        Ok("cool".into()),
+        Ok(FoundCrate::Name(name)) if name == "cool"
     }
 
     create_test! {
@@ -250,7 +282,10 @@ mod tests {
         r#"
             [dependencies]
         "#,
-        create_not_found_err("my_crate", &"test-path"),
+        Err(Error::CrateNotFound {
+            crate_name,
+            path,
+        }) if crate_name == "my_crate" && path.display().to_string() == "test-path"
     }
 
     create_test! {
@@ -259,7 +294,10 @@ mod tests {
             [dependencies]
             serde = "1.0"
         "#,
-        create_not_found_err("my_crate", &"test-path"),
+        Err(Error::CrateNotFound {
+            crate_name,
+            path,
+        }) if crate_name == "my_crate" && path.display().to_string() == "test-path"
     }
 
     create_test! {
@@ -268,7 +306,7 @@ mod tests {
             [target.'cfg(target_os="android")'.dependencies]
             my_crate = "0.1"
         "#,
-        Ok("my_crate".into()),
+        Ok(FoundCrate::Name(name)) if name == "my_crate"
     }
 
     create_test! {
@@ -277,9 +315,8 @@ mod tests {
             [target.x86_64-pc-windows-gnu.dependencies]
             my_crate = "0.1"
         "#,
-        Ok("my_crate".into()),
+        Ok(FoundCrate::Name(name)) if name == "my_crate"
     }
-
 
     create_test! {
         own_crate,
@@ -287,6 +324,6 @@ mod tests {
             [package]
             name = "my_crate"
         "#,
-        Ok("crate".into()),
+        Ok(FoundCrate::Itself)
     }
 }

@@ -21,8 +21,7 @@ name of the crate that should be imported.
 This crate provides a way to get the name of a crate, even if it renamed in `Cargo.toml`. For this
 purpose a single function `crate_name` is provided. This function needs to be called in the context
 of a proc-macro with the name of the desired crate. `CARGO_MANIFEST_DIR` will be used to find the
-current active `Cargo.toml` and this `Cargo.toml` is searched for the desired crate. The returned
-name of `crate_name` is either the given original rename (crate not renamed) or the renamed name.
+current active `Cargo.toml` and this `Cargo.toml` is searched for the desired crate.
 
 ### Example
 
@@ -30,12 +29,18 @@ name of `crate_name` is either the given original rename (crate not renamed) or 
 use quote::quote;
 use syn::Ident;
 use proc_macro2::Span;
-use proc_macro_crate::crate_name;
+use proc_macro_crate::{crate_name, FoundCrate};
 
 fn import_my_crate() {
-    let name = crate_name("my-crate").expect("my-crate is present in `Cargo.toml`");
-    let ident = Ident::new(&name, Span::call_site());
-    quote!( extern crate #ident as my_crate_known_name );
+    let found_crate = crate_name("my-crate").expect("my-crate is present in `Cargo.toml`");
+
+    match found_crate {
+        FoundCrate::Itself => quote!( crate::Something ),
+        FoundCrate::Name(name) => {
+            let ident = Ident::new(&name, Span::call_site());
+            quote!( #ident::Something )
+        }
+    };
 }
 
 ```
