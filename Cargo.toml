@@ -1,6 +1,6 @@
 [package]
 name = "proc-macro-crate"
-version = "0.1.5"
+version = "1.0.0"
 authors = ["Bastian Köcher <git@kchr.de>"]
 edition = "2018"
 categories = [ "development-tools::procedural-macro-helpers" ]
@@ -15,6 +15,7 @@ readme = "./README.md"
 
 [dependencies]
 toml = "0.5.2"
+thiserror = "1.0.24"
 
 [dev-dependencies]
 quote = "1.0.7"
