@@ -153,10 +153,12 @@ fn extract_crate_name(
     mut cargo_toml: CargoToml,
     cargo_toml_path: &Path,
 ) -> Result<FoundCrate, Error> {
-    if let Some(toml::Value::Table(t)) = cargo_toml.get("package") {
-        if let Some(toml::Value::String(s)) = t.get("name") {
-            if s == orig_name {
-                return Ok(FoundCrate::Itself);
+    if std::env::var_os("CARGO_TARGET_TMPDIR").is_none() {
+        if let Some(toml::Value::Table(t)) = cargo_toml.get("package") {
+            if let Some(toml::Value::String(s)) = t.get("name") {
+                if s == orig_name {
+                    return Ok(FoundCrate::Itself);
+                }
             }
         }
     }
