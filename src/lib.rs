@@ -123,8 +123,8 @@ pub fn crate_name(orig_name: &str) -> Result<FoundCrate, Error> {
 }
 
 /// Make sure that the given crate name is a valid rust identifier.
-fn sanitize_crate_name(name: String) -> String {
-    name.replace("-", "_")
+fn sanitize_crate_name<S: AsRef<str>>(name: S) -> String {
+    name.as_ref().replace("-", "_")
 }
 
 /// Open the given `Cargo.toml` and parse it into a hashmap.
@@ -153,11 +153,15 @@ fn extract_crate_name(
     mut cargo_toml: CargoToml,
     cargo_toml_path: &Path,
 ) -> Result<FoundCrate, Error> {
-    if std::env::var_os("CARGO_TARGET_TMPDIR").is_none() {
-        if let Some(toml::Value::Table(t)) = cargo_toml.get("package") {
-            if let Some(toml::Value::String(s)) = t.get("name") {
-                if s == orig_name {
+    if let Some(toml::Value::Table(t)) = cargo_toml.get("package") {
+        if let Some(toml::Value::String(s)) = t.get("name") {
+            if s == orig_name {
+                if std::env::var_os("CARGO_TARGET_TMPDIR").is_none() {
+                    // We're running for a library/binary crate
                     return Ok(FoundCrate::Itself);
+                } else {
+                    // We're running for an integration test
+                    return Ok(FoundCrate::Name(sanitize_crate_name(orig_name)));
                 }
             }
         }
