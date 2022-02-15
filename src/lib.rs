@@ -181,7 +181,8 @@ fn extract_crate_name(
         .and_then(|t| {
             t.values()
                 .filter_map(|v| v.as_table())
-                .filter_map(|t| t.get("dependencies").and_then(|t| t.as_table()))
+                .filter_map(|t| t.get("dependencies").or_else(|| t.get("dev-dependencies")))
+                .filter_map(|t| t.as_table())
                 .find_map(|t| extract_crate_name_from_deps(orig_name, t.clone()))
         })
     {
