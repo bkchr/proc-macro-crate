@@ -57,7 +57,6 @@ at your option.
 */
 
 use std::{
-    collections::HashMap,
     env,
     fs::File,
     io::{self, Read},
@@ -65,8 +64,6 @@ use std::{
 };
 
 use toml::{self, value::Table};
-
-type CargoToml = HashMap<String, toml::Value>;
 
 /// Error type used by this crate.
 #[derive(Debug, thiserror::Error)]
@@ -128,7 +125,7 @@ fn sanitize_crate_name<S: AsRef<str>>(name: S) -> String {
 }
 
 /// Open the given `Cargo.toml` and parse it into a hashmap.
-fn open_cargo_toml(path: &Path) -> Result<CargoToml, Error> {
+fn open_cargo_toml(path: &Path) -> Result<Table, Error> {
     let mut content = String::new();
     File::open(path)
         .map_err(|e| Error::CouldNotRead {
@@ -150,7 +147,7 @@ fn open_cargo_toml(path: &Path) -> Result<CargoToml, Error> {
 /// the renamed identifier.
 fn extract_crate_name(
     orig_name: &str,
-    mut cargo_toml: CargoToml,
+    mut cargo_toml: Table,
     cargo_toml_path: &Path,
 ) -> Result<FoundCrate, Error> {
     if let Some(toml::Value::Table(t)) = cargo_toml.get("package") {
@@ -200,7 +197,7 @@ fn extract_crate_name(
 }
 
 /// Search the `orig_name` crate at the given `key` in `cargo_toml`.
-fn search_crate_at_key(key: &str, orig_name: &str, cargo_toml: &mut CargoToml) -> Option<String> {
+fn search_crate_at_key(key: &str, orig_name: &str, cargo_toml: &mut Table) -> Option<String> {
     cargo_toml
         .remove(key)
         .and_then(|v| v.try_into::<Table>().ok())
