@@ -114,7 +114,7 @@ pub fn crate_name(orig_name: &str) -> Result<FoundCrate, Error> {
     let cargo_toml_path = manifest_dir.join("Cargo.toml");
 
     if !cargo_toml_path.exists() {
-        return Err(Error::NotFound(manifest_dir.into()));
+        return Err(Error::NotFound(manifest_dir));
     }
 
     let cargo_toml = open_cargo_toml(&cargo_toml_path)?;
@@ -124,7 +124,7 @@ pub fn crate_name(orig_name: &str) -> Result<FoundCrate, Error> {
 
 /// Make sure that the given crate name is a valid rust identifier.
 fn sanitize_crate_name<S: AsRef<str>>(name: S) -> String {
-    name.as_ref().replace("-", "_")
+    name.as_ref().replace('-', "_")
 }
 
 /// Open the given `Cargo.toml` and parse it into a hashmap.
@@ -221,7 +221,7 @@ fn extract_crate_name_from_deps(orig_name: &str, deps: Table) -> Option<String> 
             .unwrap_or(false);
 
         if key == orig_name || renamed {
-            return Some(key.clone());
+            return Some(key);
         }
     }
 
