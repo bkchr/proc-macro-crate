@@ -147,7 +147,7 @@ fn open_cargo_toml(path: &Path) -> Result<Table, Error> {
 /// the renamed identifier.
 fn extract_crate_name(
     orig_name: &str,
-    mut cargo_toml: Table,
+    cargo_toml: Table,
     cargo_toml_path: &Path,
 ) -> Result<FoundCrate, Error> {
     if let Some(toml::Value::Table(t)) = cargo_toml.get("package") {
@@ -166,15 +166,15 @@ fn extract_crate_name(
 
     if let Some(name) = ["dependencies", "dev-dependencies"]
         .iter()
-        .find_map(|k| search_crate_at_key(k, orig_name, &mut cargo_toml))
+        .find_map(|k| search_crate_at_key(k, orig_name, &cargo_toml))
     {
         return Ok(FoundCrate::Name(sanitize_crate_name(name)));
     }
 
     // Start searching `target.xy.dependencies`
     if let Some(name) = cargo_toml
-        .remove("target")
-        .and_then(|t| t.try_into::<Table>().ok())
+        .get("target")
+        .and_then(|t| t.as_table())
         .and_then(|t| {
             t.values()
                 .filter_map(|v| v.as_table())
@@ -184,7 +184,7 @@ fn extract_crate_name(
                         .chain(t.get("dev-dependencies").into_iter())
                 })
                 .filter_map(|t| t.as_table())
-                .find_map(|t| extract_crate_name_from_deps(orig_name, t.clone()))
+                .find_map(|t| extract_crate_name_from_deps(orig_name, t))
         })
     {
         return Ok(FoundCrate::Name(sanitize_crate_name(name)));
@@ -197,23 +197,20 @@ fn extract_crate_name(
 }
 
 /// Search the `orig_name` crate at the given `key` in `cargo_toml`.
-fn search_crate_at_key(key: &str, orig_name: &str, cargo_toml: &mut Table) -> Option<String> {
-    cargo_toml
-        .remove(key)
-        .and_then(|v| v.try_into::<Table>().ok())
-        .and_then(|t| extract_crate_name_from_deps(orig_name, t))
+fn search_crate_at_key<'a>(key: &str, orig_name: &str, cargo_toml: &'a Table) -> Option<&'a str> {
+    let t = cargo_toml.get(key)?.as_table()?;
+    extract_crate_name_from_deps(orig_name, t)
 }
 
 /// Extract the crate name from the given dependencies.
 ///
 /// Returns `Some(orig_name)` if the crate is not renamed in the `Cargo.toml` or otherwise
 /// the renamed identifier.
-fn extract_crate_name_from_deps(orig_name: &str, deps: Table) -> Option<String> {
-    for (key, value) in deps.into_iter() {
+fn extract_crate_name_from_deps<'a>(orig_name: &str, deps: &'a Table) -> Option<&'a str> {
+    for (key, value) in deps {
         let renamed = value
-            .try_into::<Table>()
-            .ok()
-            .and_then(|t| t.get("package").cloned())
+            .as_table()
+            .and_then(|t| t.get("package"))
             .map(|t| t.as_str() == Some(orig_name))
             .unwrap_or(false);
 
