@@ -63,6 +63,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use once_cell::sync::OnceCell;
 use toml::{self, value::Table};
 
 /// Error type used by this crate.
@@ -105,18 +106,39 @@ pub enum FoundCrate {
 /// The returned crate name is sanitized in such a way that it is a valid rust identifier. Thus,
 /// it is ready to be used in `extern crate` as identifier.
 pub fn crate_name(orig_name: &str) -> Result<FoundCrate, Error> {
-    let manifest_dir =
-        PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|_| Error::CargoManifestDirNotSet)?);
-
-    let cargo_toml_path = manifest_dir.join("Cargo.toml");
-
-    if !cargo_toml_path.exists() {
-        return Err(Error::NotFound(manifest_dir));
+    struct Cache {
+        manifest_dir: String,
+        manifest_path: PathBuf,
+        manifest: Table,
     }
 
-    let cargo_toml = open_cargo_toml(&cargo_toml_path)?;
+    static CACHE: OnceCell<Cache> = OnceCell::new();
+    let cache = CACHE.get_or_try_init(|| {
+        let manifest_dir =
+            env::var("CARGO_MANIFEST_DIR").map_err(|_| Error::CargoManifestDirNotSet)?;
 
-    extract_crate_name(orig_name, cargo_toml, &cargo_toml_path)
+        let manifest_path = Path::new(&manifest_dir).join("Cargo.toml");
+
+        if !manifest_path.exists() {
+            return Err(Error::NotFound(manifest_dir.into()));
+        }
+
+        let manifest = open_cargo_toml(&manifest_path)?;
+
+        Ok(Cache {
+            manifest_dir,
+            manifest_path,
+            manifest,
+        })
+    })?;
+
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").map_err(|_| Error::CargoManifestDirNotSet)?;
+    assert_eq!(
+        manifest_dir, cache.manifest_dir,
+        "CARGO_MANIFEST_DIR must not change within one compiler process"
+    );
+
+    extract_crate_name(orig_name, &cache.manifest, &cache.manifest_path)
 }
 
 /// Make sure that the given crate name is a valid rust identifier.
@@ -147,7 +169,7 @@ fn open_cargo_toml(path: &Path) -> Result<Table, Error> {
 /// the renamed identifier.
 fn extract_crate_name(
     orig_name: &str,
-    cargo_toml: Table,
+    cargo_toml: &Table,
     cargo_toml_path: &Path,
 ) -> Result<FoundCrate, Error> {
     if let Some(toml::Value::Table(t)) = cargo_toml.get("package") {
@@ -166,7 +188,7 @@ fn extract_crate_name(
 
     if let Some(name) = ["dependencies", "dev-dependencies"]
         .iter()
-        .find_map(|k| search_crate_at_key(k, orig_name, &cargo_toml))
+        .find_map(|k| search_crate_at_key(k, orig_name, cargo_toml))
     {
         return Ok(FoundCrate::Name(sanitize_crate_name(name)));
     }
@@ -237,7 +259,7 @@ mod tests {
                 let cargo_toml = toml::from_str($cargo_toml).expect("Parses `Cargo.toml`");
                 let path = PathBuf::from("test-path");
 
-                match extract_crate_name("my_crate", cargo_toml, &path) {
+                match extract_crate_name("my_crate", &cargo_toml, &path) {
                     $( $result )* => (),
                     o => panic!("Invalid result: {:?}", o),
                 }
