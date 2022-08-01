@@ -107,6 +107,8 @@ pub enum FoundCrate {
 /// The returned crate name is sanitized in such a way that it is a valid rust identifier. Thus,
 /// it is ready to be used in `extern crate` as identifier.
 pub fn crate_name(orig_name: &str) -> Result<FoundCrate, Error> {
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").map_err(|_| Error::CargoManifestDirNotSet)?;
+
     struct Cache {
         manifest_dir: String,
         manifest_path: PathBuf,
@@ -115,9 +117,7 @@ pub fn crate_name(orig_name: &str) -> Result<FoundCrate, Error> {
 
     static CACHE: OnceCell<Cache> = OnceCell::new();
     let cache = CACHE.get_or_try_init(|| {
-        let manifest_dir =
-            env::var("CARGO_MANIFEST_DIR").map_err(|_| Error::CargoManifestDirNotSet)?;
-
+        let manifest_dir = manifest_dir.clone();
         let manifest_path = Path::new(&manifest_dir).join("Cargo.toml");
 
         if !manifest_path.exists() {
@@ -134,7 +134,6 @@ pub fn crate_name(orig_name: &str) -> Result<FoundCrate, Error> {
         })
     })?;
 
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").map_err(|_| Error::CargoManifestDirNotSet)?;
     assert_eq!(
         manifest_dir, cache.manifest_dir,
         "CARGO_MANIFEST_DIR must not change within one compiler process"
