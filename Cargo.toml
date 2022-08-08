@@ -1,6 +1,6 @@
 [package]
 name = "proc-macro-crate"
-version = "1.2.0"
+version = "1.2.1"
 authors = ["Bastian Köcher <git@kchr.de>"]
 edition = "2018"
 categories = [ "development-tools::procedural-macro-helpers" ]
