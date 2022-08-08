@@ -57,14 +57,16 @@ at your option.
 */
 
 use std::{
-    collections::BTreeMap,
+    collections::btree_map::{self, BTreeMap},
     env,
-    fs::File,
+    fs::{self, File},
     io::{self, Read},
     path::{Path, PathBuf},
+    sync::Mutex,
+    time::SystemTime,
 };
 
-use once_cell::sync::OnceCell;
+use once_cell::sync::Lazy;
 use toml::{self, value::Table};
 
 /// Error type used by this crate.
@@ -91,6 +93,18 @@ pub enum FoundCrate {
     Name(String),
 }
 
+// In a rustc invocation, there will only ever be one entry in this map, since every crate is
+// compiled with its own rustc process. However, the same is not (currently) the case for
+// rust-analyzer.
+type Cache = BTreeMap<String, CacheEntry>;
+
+struct CacheEntry {
+    manifest_ts: SystemTime,
+    crate_names: CrateNames,
+}
+
+type CrateNames = BTreeMap<String, FoundCrate>;
+
 /// Find the crate name for the given `orig_name` in the current `Cargo.toml`.
 ///
 /// `orig_name` should be the original name of the searched crate.
@@ -108,45 +122,63 @@ pub enum FoundCrate {
 /// it is ready to be used in `extern crate` as identifier.
 pub fn crate_name(orig_name: &str) -> Result<FoundCrate, Error> {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").map_err(|_| Error::CargoManifestDirNotSet)?;
+    let manifest_path = Path::new(&manifest_dir).join("Cargo.toml");
+    let manifest_ts = cargo_toml_timestamp(&manifest_path)?;
 
-    struct Cache {
-        manifest_dir: String,
-        manifest_path: PathBuf,
-        crate_names: BTreeMap<String, FoundCrate>,
-    }
+    // This `Lazy<Mutex<_>>` can just be a `Mutex<_>` starting in Rust 1.63:
+    // https://doc.rust-lang.org/beta/std/sync/struct.Mutex.html#method.new
+    static CACHE: Lazy<Mutex<Cache>> = Lazy::new(Mutex::default);
+    let mut cache = CACHE.lock().unwrap();
 
-    static CACHE: OnceCell<Cache> = OnceCell::new();
-    let cache = CACHE.get_or_try_init(|| {
-        let manifest_dir = manifest_dir.clone();
-        let manifest_path = Path::new(&manifest_dir).join("Cargo.toml");
+    let crate_names = match cache.entry(manifest_dir) {
+        btree_map::Entry::Occupied(entry) => {
+            let cache_entry = entry.into_mut();
 
-        if !manifest_path.exists() {
-            return Err(Error::NotFound(manifest_dir.into()));
+            // Timestamp changed, rebuild this cache entry.
+            if manifest_ts != cache_entry.manifest_ts {
+                *cache_entry = read_cargo_toml(&manifest_path, manifest_ts)?;
+            }
+
+            &cache_entry.crate_names
         }
+        btree_map::Entry::Vacant(entry) => {
+            let cache_entry = entry.insert(read_cargo_toml(&manifest_path, manifest_ts)?);
+            &cache_entry.crate_names
+        }
+    };
 
-        let manifest = open_cargo_toml(&manifest_path)?;
-        let crate_names = extract_crate_names(&manifest)?;
-
-        Ok(Cache {
-            manifest_dir,
-            manifest_path,
-            crate_names,
-        })
-    })?;
-
-    assert_eq!(
-        manifest_dir, cache.manifest_dir,
-        "CARGO_MANIFEST_DIR must not change within one compiler process"
-    );
-
-    Ok(cache
-        .crate_names
+    Ok(crate_names
         .get(orig_name)
         .ok_or_else(|| Error::CrateNotFound {
             crate_name: orig_name.to_owned(),
-            path: cache.manifest_path.clone(),
+            path: manifest_path,
         })?
         .clone())
+}
+
+fn cargo_toml_timestamp(manifest_path: &Path) -> Result<SystemTime, Error> {
+    fs::metadata(manifest_path)
+        .and_then(|meta| meta.modified())
+        .map_err(|source| {
+            if source.kind() == io::ErrorKind::NotFound {
+                Error::NotFound(manifest_path.to_owned())
+            } else {
+                Error::CouldNotRead {
+                    path: manifest_path.to_owned(),
+                    source,
+                }
+            }
+        })
+}
+
+fn read_cargo_toml(manifest_path: &Path, manifest_ts: SystemTime) -> Result<CacheEntry, Error> {
+    let manifest = open_cargo_toml(manifest_path)?;
+    let crate_names = extract_crate_names(&manifest)?;
+
+    Ok(CacheEntry {
+        manifest_ts,
+        crate_names,
+    })
 }
 
 /// Make sure that the given crate name is a valid rust identifier.
@@ -172,7 +204,7 @@ fn open_cargo_toml(path: &Path) -> Result<Table, Error> {
 
 /// Extract all crate names from the given `Cargo.toml` by checking the `dependencies` and
 /// `dev-dependencies`.
-fn extract_crate_names(cargo_toml: &Table) -> Result<BTreeMap<String, FoundCrate>, Error> {
+fn extract_crate_names(cargo_toml: &Table) -> Result<CrateNames, Error> {
     let package_name = extract_package_name(cargo_toml);
     let root_pkg = package_name.map(|name| {
         let cr = match env::var_os("CARGO_TARGET_TMPDIR") {
