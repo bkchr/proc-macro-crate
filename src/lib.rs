@@ -58,7 +58,7 @@ at your option.
 
 use std::{
     collections::btree_map::{self, BTreeMap},
-    env,
+    env, fmt,
     fs::{self, File},
     io::{self, Read},
     path::{Path, PathBuf},
@@ -70,18 +70,46 @@ use once_cell::sync::Lazy;
 use toml::{self, value::Table};
 
 /// Error type used by this crate.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum Error {
-    #[error("Could not find `Cargo.toml` in manifest dir: `{0}`.")]
     NotFound(PathBuf),
-    #[error("`CARGO_MANIFEST_DIR` env variable not set.")]
     CargoManifestDirNotSet,
-    #[error("Could not read `{path}`.")]
     CouldNotRead { path: PathBuf, source: io::Error },
-    #[error("Invalid toml file.")]
     InvalidToml { source: toml::de::Error },
-    #[error("Could not find `{crate_name}` in `dependencies` or `dev-dependencies` in `{path}`!")]
     CrateNotFound { crate_name: String, path: PathBuf },
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::CouldNotRead { source, .. } => Some(source),
+            Error::InvalidToml { source } => Some(source),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Error::NotFound(path) => write!(
+                f,
+                "Could not find `Cargo.toml` in manifest dir: `{}`.",
+                path.display()
+            ),
+            Error::CargoManifestDirNotSet => {
+                f.write_str("`CARGO_MANIFEST_DIR` env variable not set.")
+            }
+            Error::CouldNotRead { path, .. } => write!(f, "Could not read `{}`.", path.display()),
+            Error::InvalidToml { .. } => f.write_str("Invalid toml file."),
+            Error::CrateNotFound { crate_name, path } => write!(
+                f,
+                "Could not find `{}` in `dependencies` or `dev-dependencies` in `{}`!",
+                crate_name,
+                path.display(),
+            ),
+        }
+    }
 }
 
 /// The crate as found by [`crate_name`].
