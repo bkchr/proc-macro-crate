@@ -3,11 +3,11 @@ name = "proc-macro-crate"
 version = "1.2.1"
 authors = ["Bastian Köcher <git@kchr.de>"]
 edition = "2018"
-categories = [ "development-tools::procedural-macro-helpers" ]
+categories = ["development-tools::procedural-macro-helpers"]
 documentation = "https://docs.rs/proc-macro-crate"
 repository = "https://github.com/bkchr/proc-macro-crate"
-keywords = [ "macro-rules", "crate", "macro", "proc-macro" ]
-license = "Apache-2.0/MIT"
+keywords = ["macro-rules", "crate", "macro", "proc-macro"]
+license = "MIT OR Apache-2.0"
 description = """
 Replacement for crate (macro_rules keyword) in proc-macros
 """
