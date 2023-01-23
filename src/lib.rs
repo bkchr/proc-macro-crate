@@ -58,9 +58,7 @@ at your option.
 
 use std::{
     collections::btree_map::{self, BTreeMap},
-    env, fmt,
-    fs::{self, File},
-    io::{self, Read},
+    env, fmt, fs, io,
     path::{Path, PathBuf},
     sync::Mutex,
     time::SystemTime,
@@ -216,17 +214,10 @@ fn sanitize_crate_name<S: AsRef<str>>(name: S) -> String {
 
 /// Open the given `Cargo.toml` and parse it into a hashmap.
 fn open_cargo_toml(path: &Path) -> Result<Table, Error> {
-    let mut content = String::new();
-    File::open(path)
-        .map_err(|e| Error::CouldNotRead {
-            source: e,
-            path: path.into(),
-        })?
-        .read_to_string(&mut content)
-        .map_err(|e| Error::CouldNotRead {
-            source: e,
-            path: path.into(),
-        })?;
+    let content = fs::read_to_string(path).map_err(|e| Error::CouldNotRead {
+        source: e,
+        path: path.into(),
+    })?;
     toml::from_str(&content).map_err(|e| Error::InvalidToml { source: e })
 }
 
