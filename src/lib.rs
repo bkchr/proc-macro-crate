@@ -58,16 +58,14 @@ at your option.
 
 use std::{
     collections::btree_map::{self, BTreeMap},
-    env, fmt,
-    fs::{self, File},
-    io::{self, Read},
+    env, fmt, fs, io,
     path::{Path, PathBuf},
     sync::Mutex,
     time::SystemTime,
 };
 
 use once_cell::sync::Lazy;
-use toml::{self, value::Table};
+use toml_edit::{Document, Item, Table, TomlError};
 
 /// Error type used by this crate.
 #[derive(Debug)]
@@ -75,7 +73,7 @@ pub enum Error {
     NotFound(PathBuf),
     CargoManifestDirNotSet,
     CouldNotRead { path: PathBuf, source: io::Error },
-    InvalidToml { source: toml::de::Error },
+    InvalidToml { source: TomlError },
     CrateNotFound { crate_name: String, path: PathBuf },
 }
 
@@ -215,24 +213,19 @@ fn sanitize_crate_name<S: AsRef<str>>(name: S) -> String {
 }
 
 /// Open the given `Cargo.toml` and parse it into a hashmap.
-fn open_cargo_toml(path: &Path) -> Result<Table, Error> {
-    let mut content = String::new();
-    File::open(path)
-        .map_err(|e| Error::CouldNotRead {
-            source: e,
-            path: path.into(),
-        })?
-        .read_to_string(&mut content)
-        .map_err(|e| Error::CouldNotRead {
-            source: e,
-            path: path.into(),
-        })?;
-    toml::from_str(&content).map_err(|e| Error::InvalidToml { source: e })
+fn open_cargo_toml(path: &Path) -> Result<Document, Error> {
+    let content = fs::read_to_string(path).map_err(|e| Error::CouldNotRead {
+        source: e,
+        path: path.into(),
+    })?;
+    content
+        .parse::<Document>()
+        .map_err(|e| Error::InvalidToml { source: e })
 }
 
 /// Extract all crate names from the given `Cargo.toml` by checking the `dependencies` and
 /// `dev-dependencies`.
-fn extract_crate_names(cargo_toml: &Table) -> Result<CrateNames, Error> {
+fn extract_crate_names(cargo_toml: &Document) -> Result<CrateNames, Error> {
     let package_name = extract_package_name(cargo_toml);
     let root_pkg = package_name.map(|name| {
         let cr = match env::var_os("CARGO_TARGET_TMPDIR") {
@@ -248,8 +241,8 @@ fn extract_crate_names(cargo_toml: &Table) -> Result<CrateNames, Error> {
     let dep_tables = dep_tables(cargo_toml).chain(target_dep_tables(cargo_toml));
     let dep_pkgs = dep_tables.flatten().map(|(dep_name, dep_value)| {
         let pkg_name = dep_value
-            .as_table()
-            .and_then(|t| t.get("package")?.as_str())
+            .get("package")
+            .and_then(|i| i.as_str())
             .unwrap_or(dep_name);
         let cr = FoundCrate::Name(sanitize_crate_name(dep_name));
 
@@ -259,18 +252,19 @@ fn extract_crate_names(cargo_toml: &Table) -> Result<CrateNames, Error> {
     Ok(root_pkg.into_iter().chain(dep_pkgs).collect())
 }
 
-fn extract_package_name(cargo_toml: &Table) -> Option<&str> {
-    cargo_toml.get("package")?.as_table()?.get("name")?.as_str()
+fn extract_package_name(cargo_toml: &Document) -> Option<&str> {
+    cargo_toml.get("package")?.get("name")?.as_str()
 }
 
-fn target_dep_tables(cargo_toml: &Table) -> impl Iterator<Item = &Table> {
+fn target_dep_tables(cargo_toml: &Document) -> impl Iterator<Item = &Table> {
     cargo_toml
         .get("target")
         .into_iter()
-        .filter_map(toml::Value::as_table)
+        .filter_map(Item::as_table)
         .flat_map(|t| {
-            t.values()
-                .filter_map(toml::Value::as_table)
+            t.iter()
+                .map(|(_, value)| value)
+                .filter_map(Item::as_table)
                 .flat_map(dep_tables)
         })
 }
@@ -280,7 +274,7 @@ fn dep_tables(table: &Table) -> impl Iterator<Item = &Table> {
         .get("dependencies")
         .into_iter()
         .chain(table.get("dev-dependencies"))
-        .filter_map(toml::Value::as_table)
+        .filter_map(Item::as_table)
 }
 
 #[cfg(test)]
@@ -295,7 +289,7 @@ mod tests {
         ) => {
             #[test]
             fn $name() {
-                let cargo_toml = toml::from_str($cargo_toml).expect("Parses `Cargo.toml`");
+                let cargo_toml = $cargo_toml.parse::<Document>().expect("Parses `Cargo.toml`");
 
                 match extract_crate_names(&cargo_toml).map(|mut map| map.remove("my_crate")) {
                     $( $result )* => (),
