@@ -1,8 +1,8 @@
 [package]
 name = "proc-macro-crate"
-version = "1.2.1"
+version = "1.3.0"
 authors = ["Bastian Köcher <git@kchr.de>"]
-edition = "2018"
+edition = "2021"
 categories = ["development-tools::procedural-macro-helpers"]
 documentation = "https://docs.rs/proc-macro-crate"
 repository = "https://github.com/bkchr/proc-macro-crate"
@@ -12,6 +12,7 @@ description = """
 Replacement for crate (macro_rules keyword) in proc-macros
 """
 readme = "./README.md"
+rust-version = "1.56.0"
 
 [dependencies]
 toml_edit = "0.18"
