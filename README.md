@@ -1,7 +1,7 @@
 # proc-macro-crate
 
 
-[![](https://docs.rs/proc-macro-crate/badge.svg)](https://docs.rs/proc-macro-crate) [![](https://img.shields.io/crates/v/proc-macro-crate.svg)](https://crates.io/crates/proc-macro-crate) [![](https://img.shields.io/crates/d/proc-macro-crate.svg)](https://crates.io/crates/proc-macro-crate) [![Build Status](https://travis-ci.org/bkchr/proc-macro-crate.svg?branch=master)](https://travis-ci.org/bkchr/proc-macro-crate)
+[![](https://docs.rs/proc-macro-crate/badge.svg)](https://docs.rs/proc-macro-crate/) [![](https://img.shields.io/crates/v/proc-macro-crate.svg)](https://crates.io/crates/proc-macro-crate) [![](https://img.shields.io/crates/d/proc-macro-crate.png)](https://crates.io/crates/proc-macro-crate) [![Build Status](https://travis-ci.org/bkchr/proc-macro-crate.png?branch=master)](https://travis-ci.org/bkchr/proc-macro-crate)
 
 Providing support for `$crate` in procedural macros.
 
@@ -13,7 +13,7 @@ Providing support for `$crate` in procedural macros.
 
 In `macro_rules!` `$crate` is used to get the path of the crate where a macro is declared in. In
 procedural macros there is currently no easy way to get this path. A common hack is to import the
-desired crate with a know name and use this. However, with Rust edition 2018 and dropping
+desired crate with a know name and use this. However, with rust edition 2018 and dropping
 `extern crate` declarations from `lib.rs`, people start to rename crates in `Cargo.toml` directly.
 However, this breaks importing the crate, as the proc-macro developer does not know the renamed
 name of the crate that should be imported.
@@ -45,6 +45,35 @@ fn import_my_crate() {
 
 ```
 
+### Edge cases
+
+There are multiple edge cases when it comes to determining the correct crate. If you for example
+import a crate as its own dependency, like this:
+
+```toml
+[package]
+name = "my_crate"
+
+[dev-dependencies]
+my_crate = { version = "0.1", features = [ "test-feature" ] }
+```
+
+The crate will return `FoundCrate::Itself` and you will not be able to find the other instance
+of your crate in `dev-dependencies`. Other similar cases are when one crate is imported multiple
+times:
+
+```toml
+[package]
+name = "my_crate"
+
+[dependencies]
+some-crate = { version = "0.5" }
+some-crate-old = { package = "some-crate", version = "0.1" }
+```
+
+When searching for `some-crate` in this `Cargo.toml` it will return `FoundCrate::Name("some_old_crate")`,
+aka the last definition of the crate in the `Cargo.toml`.
+
 ### License
 
 Licensed under either of
@@ -55,4 +84,4 @@ Licensed under either of
 
 at your option.
 
-License: Apache-2.0/MIT
+License: MIT OR Apache-2.0

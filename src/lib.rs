@@ -45,13 +45,42 @@ fn import_my_crate() {
 # fn main() {}
 ```
 
+## Edge cases
+
+There are multiple edge cases when it comes to determining the correct crate. If you for example
+import a crate as its own dependency, like this:
+
+```toml
+[package]
+name = "my_crate"
+
+[dev-dependencies]
+my_crate = { version = "0.1", features = [ "test-feature" ] }
+```
+
+The crate will return `FoundCrate::Itself` and you will not be able to find the other instance
+of your crate in `dev-dependencies`. Other similar cases are when one crate is imported multiple
+times:
+
+```toml
+[package]
+name = "my_crate"
+
+[dependencies]
+some-crate = { version = "0.5" }
+some-crate-old = { package = "some-crate", version = "0.1" }
+```
+
+When searching for `some-crate` in this `Cargo.toml` it will return `FoundCrate::Name("some_old_crate")`,
+aka the last definition of the crate in the `Cargo.toml`.
+
 ## License
 
 Licensed under either of
 
- * [Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0)
+ * [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0)
 
- * [MIT license](http://opensource.org/licenses/MIT)
+ * [MIT license](https://opensource.org/licenses/MIT)
 
 at your option.
 */
@@ -227,7 +256,7 @@ fn open_cargo_toml(path: &Path) -> Result<Document, Error> {
 /// `dev-dependencies`.
 fn extract_crate_names(cargo_toml: &Document) -> Result<CrateNames, Error> {
     let package_name = extract_package_name(cargo_toml);
-    let root_pkg = package_name.map(|name| {
+    let root_pkg = package_name.as_ref().map(|name| {
         let cr = match env::var_os("CARGO_TARGET_TMPDIR") {
             // We're running for a library/binary crate
             None => FoundCrate::Itself,
@@ -235,18 +264,23 @@ fn extract_crate_names(cargo_toml: &Document) -> Result<CrateNames, Error> {
             Some(_) => FoundCrate::Name(sanitize_crate_name(name)),
         };
 
-        (name.to_owned(), cr)
+        (name.to_string(), cr)
     });
 
     let dep_tables = dep_tables(cargo_toml).chain(target_dep_tables(cargo_toml));
-    let dep_pkgs = dep_tables.flatten().map(|(dep_name, dep_value)| {
+    let dep_pkgs = dep_tables.flatten().filter_map(move |(dep_name, dep_value)| {
         let pkg_name = dep_value
             .get("package")
             .and_then(|i| i.as_str())
             .unwrap_or(dep_name);
+
+        if package_name.as_ref().map_or(false, |n| *n == pkg_name) {
+            return None;
+        }
+
         let cr = FoundCrate::Name(sanitize_crate_name(dep_name));
 
-        (pkg_name.to_owned(), cr)
+        Some((pkg_name.to_owned(), cr))
     });
 
     Ok(root_pkg.into_iter().chain(dep_pkgs).collect())
@@ -291,7 +325,7 @@ mod tests {
             fn $name() {
                 let cargo_toml = $cargo_toml.parse::<Document>().expect("Parses `Cargo.toml`");
 
-                match extract_crate_names(&cargo_toml).map(|mut map| map.remove("my_crate")) {
+               match extract_crate_names(&cargo_toml).map(|mut map| map.remove("my_crate")) {
                     $( $result )* => (),
                     o => panic!("Invalid result: {:?}", o),
                 }
@@ -378,5 +412,27 @@ mod tests {
             name = "my_crate"
         "#,
         Ok(Some(FoundCrate::Itself))
+    }
+
+    create_test! {
+        own_crate_and_in_deps,
+        r#"
+            [package]
+            name = "my_crate"
+
+            [dev-dependencies]
+            my_crate = "0.1"
+        "#,
+        Ok(Some(FoundCrate::Itself))
+    }
+
+    create_test! {
+        multiple_times,
+        r#"
+            [dependencies]
+            my_crate = { version = "0.5" }
+            my-crate-old = { package = "my_crate", version = "0.1" }
+        "#,
+        Ok(Some(FoundCrate::Name(name))) if name == "my_crate_old"
     }
 }
