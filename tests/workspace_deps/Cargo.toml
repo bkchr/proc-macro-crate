@@ -1,0 +1,8 @@
+[workspace]
+members = ["my-cool-dep", "test-crate"]
+resolver = "2"
+
+
+[workspace.dependencies]
+my-cool-dep = { package = "my-cool-dep-real-name", path = "my-cool-dep" }
+proc-macro-crate = { path = "../.." }

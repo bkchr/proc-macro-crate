@@ -89,18 +89,19 @@ use std::{
     collections::btree_map::{self, BTreeMap},
     env, fmt, fs, io,
     path::{Path, PathBuf},
+    process::Command,
     sync::Mutex,
     time::SystemTime,
 };
 
-use once_cell::sync::Lazy;
 use toml_edit::{Document, Item, Table, TomlError};
 
 /// Error type used by this crate.
-#[derive(Debug)]
 pub enum Error {
     NotFound(PathBuf),
     CargoManifestDirNotSet,
+    CargoEnvVariableNotSet,
+    FailedGettingWorkspaceManifestPath,
     CouldNotRead { path: PathBuf, source: io::Error },
     InvalidToml { source: TomlError },
     CrateNotFound { crate_name: String, path: PathBuf },
@@ -116,17 +117,19 @@ impl std::error::Error for Error {
     }
 }
 
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::NotFound(path) => write!(
-                f,
-                "Could not find `Cargo.toml` in manifest dir: `{}`.",
-                path.display()
-            ),
-            Error::CargoManifestDirNotSet => {
-                f.write_str("`CARGO_MANIFEST_DIR` env variable not set.")
-            }
+            Error::NotFound(path) =>
+                write!(f, "Could not find `Cargo.toml` in manifest dir: `{}`.", path.display()),
+            Error::CargoManifestDirNotSet =>
+                f.write_str("`CARGO_MANIFEST_DIR` env variable not set."),
             Error::CouldNotRead { path, .. } => write!(f, "Could not read `{}`.", path.display()),
             Error::InvalidToml { .. } => f.write_str("Invalid toml file."),
             Error::CrateNotFound { crate_name, path } => write!(
@@ -135,6 +138,9 @@ impl fmt::Display for Error {
                 crate_name,
                 path.display(),
             ),
+            Error::CargoEnvVariableNotSet => f.write_str("`CARGO` env variable not set."),
+            Error::FailedGettingWorkspaceManifestPath =>
+                f.write_str("Failed to get the path of the workspace manifest path."),
         }
     }
 }
@@ -155,6 +161,7 @@ type Cache = BTreeMap<String, CacheEntry>;
 
 struct CacheEntry {
     manifest_ts: SystemTime,
+    workspace_manifest_ts: SystemTime,
     crate_names: CrateNames,
 }
 
@@ -178,11 +185,13 @@ type CrateNames = BTreeMap<String, FoundCrate>;
 pub fn crate_name(orig_name: &str) -> Result<FoundCrate, Error> {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").map_err(|_| Error::CargoManifestDirNotSet)?;
     let manifest_path = Path::new(&manifest_dir).join("Cargo.toml");
-    let manifest_ts = cargo_toml_timestamp(&manifest_path)?;
 
-    // This `Lazy<Mutex<_>>` can just be a `Mutex<_>` starting in Rust 1.63:
-    // https://doc.rust-lang.org/beta/std/sync/struct.Mutex.html#method.new
-    static CACHE: Lazy<Mutex<Cache>> = Lazy::new(Mutex::default);
+    let workspace_manifest_path = workspace_manifest_path(&manifest_path)?;
+
+    let manifest_ts = cargo_toml_timestamp(&manifest_path)?;
+    let workspace_manifest_ts = cargo_toml_timestamp(&workspace_manifest_path)?;
+
+    static CACHE: Mutex<Cache> = Mutex::new(BTreeMap::new());
     let mut cache = CACHE.lock().unwrap();
 
     let crate_names = match cache.entry(manifest_dir) {
@@ -190,16 +199,28 @@ pub fn crate_name(orig_name: &str) -> Result<FoundCrate, Error> {
             let cache_entry = entry.into_mut();
 
             // Timestamp changed, rebuild this cache entry.
-            if manifest_ts != cache_entry.manifest_ts {
-                *cache_entry = read_cargo_toml(&manifest_path, manifest_ts)?;
+            if manifest_ts != cache_entry.manifest_ts ||
+                workspace_manifest_ts != cache_entry.workspace_manifest_ts
+            {
+                *cache_entry = read_cargo_toml(
+                    &manifest_path,
+                    &workspace_manifest_path,
+                    manifest_ts,
+                    workspace_manifest_ts,
+                )?;
             }
 
             &cache_entry.crate_names
-        }
+        },
         btree_map::Entry::Vacant(entry) => {
-            let cache_entry = entry.insert(read_cargo_toml(&manifest_path, manifest_ts)?);
+            let cache_entry = entry.insert(read_cargo_toml(
+                &manifest_path,
+                &workspace_manifest_path,
+                manifest_ts,
+                workspace_manifest_ts,
+            )?);
             &cache_entry.crate_names
-        }
+        },
     };
 
     Ok(crate_names
@@ -211,29 +232,73 @@ pub fn crate_name(orig_name: &str) -> Result<FoundCrate, Error> {
         .clone())
 }
 
-fn cargo_toml_timestamp(manifest_path: &Path) -> Result<SystemTime, Error> {
-    fs::metadata(manifest_path)
-        .and_then(|meta| meta.modified())
-        .map_err(|source| {
-            if source.kind() == io::ErrorKind::NotFound {
-                Error::NotFound(manifest_path.to_owned())
-            } else {
-                Error::CouldNotRead {
-                    path: manifest_path.to_owned(),
-                    source,
-                }
-            }
-        })
+fn workspace_manifest_path(cargo_toml_manifest: &Path) -> Result<PathBuf, Error> {
+    let stdout = Command::new(env::var("CARGO").map_err(|_| Error::CargoEnvVariableNotSet)?)
+        .arg("locate-project")
+        .args(&["--workspace", "--message-format=plain"])
+        .arg(format!("--manifest-path={}", cargo_toml_manifest.display()))
+        .output()
+        .map_err(|_| Error::FailedGettingWorkspaceManifestPath)?
+        .stdout;
+
+    String::from_utf8(stdout)
+        .map_err(|_| Error::FailedGettingWorkspaceManifestPath)
+        .map(|s| s.trim().into())
 }
 
-fn read_cargo_toml(manifest_path: &Path, manifest_ts: SystemTime) -> Result<CacheEntry, Error> {
-    let manifest = open_cargo_toml(manifest_path)?;
-    let crate_names = extract_crate_names(&manifest)?;
-
-    Ok(CacheEntry {
-        manifest_ts,
-        crate_names,
+fn cargo_toml_timestamp(manifest_path: &Path) -> Result<SystemTime, Error> {
+    fs::metadata(manifest_path).and_then(|meta| meta.modified()).map_err(|source| {
+        if source.kind() == io::ErrorKind::NotFound {
+            Error::NotFound(manifest_path.to_owned())
+        } else {
+            Error::CouldNotRead { path: manifest_path.to_owned(), source }
+        }
     })
+}
+
+fn read_cargo_toml(
+    manifest_path: &Path,
+    workspace_manifest_path: &Path,
+    manifest_ts: SystemTime,
+    workspace_manifest_ts: SystemTime,
+) -> Result<CacheEntry, Error> {
+    let manifest = open_cargo_toml(manifest_path)?;
+
+    let workspace_dependencies = if manifest_path != workspace_manifest_path {
+        let workspace_manifest = open_cargo_toml(workspace_manifest_path)?;
+        extract_workspace_dependencies(workspace_manifest)?
+    } else {
+        Default::default()
+    };
+
+    let crate_names = extract_crate_names(&manifest, workspace_dependencies)?;
+
+    Ok(CacheEntry { manifest_ts, workspace_manifest_ts, crate_names })
+}
+
+/// Extract all `[workspace.dependencies]`.
+///
+/// Returns a hash map that maps from dep name to the package name. Dep name
+/// and package name can be the same if there doesn't exist any rename.
+fn extract_workspace_dependencies(
+    workspace_toml: Document,
+) -> Result<BTreeMap<String, String>, Error> {
+    Ok(workspace_dep_tables(&workspace_toml)
+        .into_iter()
+        .flatten()
+        .map(move |(dep_name, dep_value)| {
+            let pkg_name = dep_value.get("package").and_then(|i| i.as_str()).unwrap_or(dep_name);
+
+            (dep_name.to_owned(), pkg_name.to_owned())
+        })
+        .collect())
+}
+
+/// Return an iterator over all `[workspace.dependencies]`
+fn workspace_dep_tables(cargo_toml: &Document) -> Option<&Table> {
+    cargo_toml
+        .get("workspace")
+        .and_then(|w| w.as_table()?.get("dependencies")?.as_table())
 }
 
 /// Make sure that the given crate name is a valid rust identifier.
@@ -243,18 +308,17 @@ fn sanitize_crate_name<S: AsRef<str>>(name: S) -> String {
 
 /// Open the given `Cargo.toml` and parse it into a hashmap.
 fn open_cargo_toml(path: &Path) -> Result<Document, Error> {
-    let content = fs::read_to_string(path).map_err(|e| Error::CouldNotRead {
-        source: e,
-        path: path.into(),
-    })?;
-    content
-        .parse::<Document>()
-        .map_err(|e| Error::InvalidToml { source: e })
+    let content = fs::read_to_string(path)
+        .map_err(|e| Error::CouldNotRead { source: e, path: path.into() })?;
+    content.parse::<Document>().map_err(|e| Error::InvalidToml { source: e })
 }
 
 /// Extract all crate names from the given `Cargo.toml` by checking the `dependencies` and
 /// `dev-dependencies`.
-fn extract_crate_names(cargo_toml: &Document) -> Result<CrateNames, Error> {
+fn extract_crate_names(
+    cargo_toml: &Document,
+    workspace_dependencies: BTreeMap<String, String>,
+) -> Result<CrateNames, Error> {
     let package_name = extract_package_name(cargo_toml);
     let root_pkg = package_name.as_ref().map(|name| {
         let cr = match env::var_os("CARGO_TARGET_TMPDIR") {
@@ -269,14 +333,20 @@ fn extract_crate_names(cargo_toml: &Document) -> Result<CrateNames, Error> {
 
     let dep_tables = dep_tables(cargo_toml).chain(target_dep_tables(cargo_toml));
     let dep_pkgs = dep_tables.flatten().filter_map(move |(dep_name, dep_value)| {
-        let pkg_name = dep_value
-            .get("package")
-            .and_then(|i| i.as_str())
-            .unwrap_or(dep_name);
+        let pkg_name = dep_value.get("package").and_then(|i| i.as_str()).unwrap_or(dep_name);
 
+        // We already handle this via `root_pkg` above.
         if package_name.as_ref().map_or(false, |n| *n == pkg_name) {
-            return None;
+            return None
         }
+
+        // Check if this is a workspace dependency.
+        let workspace = dep_value.get("workspace").and_then(|w| w.as_bool()).unwrap_or_default();
+
+        let pkg_name = workspace
+            .then(|| workspace_dependencies.get(pkg_name).map(|p| p.as_ref()))
+            .flatten()
+            .unwrap_or(pkg_name);
 
         let cr = FoundCrate::Name(sanitize_crate_name(dep_name));
 
@@ -291,16 +361,9 @@ fn extract_package_name(cargo_toml: &Document) -> Option<&str> {
 }
 
 fn target_dep_tables(cargo_toml: &Document) -> impl Iterator<Item = &Table> {
-    cargo_toml
-        .get("target")
-        .into_iter()
-        .filter_map(Item::as_table)
-        .flat_map(|t| {
-            t.iter()
-                .map(|(_, value)| value)
-                .filter_map(Item::as_table)
-                .flat_map(dep_tables)
-        })
+    cargo_toml.get("target").into_iter().filter_map(Item::as_table).flat_map(|t| {
+        t.iter().map(|(_, value)| value).filter_map(Item::as_table).flat_map(dep_tables)
+    })
 }
 
 fn dep_tables(table: &Table) -> impl Iterator<Item = &Table> {
@@ -319,16 +382,25 @@ mod tests {
         (
             $name:ident,
             $cargo_toml:expr,
+            $workspace_toml:expr,
             $( $result:tt )*
         ) => {
             #[test]
             fn $name() {
-                let cargo_toml = $cargo_toml.parse::<Document>().expect("Parses `Cargo.toml`");
+                let cargo_toml = $cargo_toml.parse::<Document>()
+                    .expect("Parses `Cargo.toml`");
+                let workspace_cargo_toml = $workspace_toml.parse::<Document>()
+                    .expect("Parses workspace `Cargo.toml`");
 
-               match extract_crate_names(&cargo_toml).map(|mut map| map.remove("my_crate")) {
-                    $( $result )* => (),
-                    o => panic!("Invalid result: {:?}", o),
-                }
+                let workspace_deps = extract_workspace_dependencies(workspace_cargo_toml)
+                    .expect("Extracts workspace dependencies");
+
+                match extract_crate_names(&cargo_toml, workspace_deps)
+                    .map(|mut map| map.remove("my_crate"))
+                {
+                   $( $result )* => (),
+                   o => panic!("Invalid result: {:?}", o),
+               }
             }
         };
     }
@@ -339,6 +411,7 @@ mod tests {
             [dependencies]
             my_crate = "0.1"
         "#,
+        "",
         Ok(Some(FoundCrate::Name(name))) if name == "my_crate"
     }
 
@@ -348,6 +421,7 @@ mod tests {
             [dev-dependencies]
             my_crate = "0.1"
         "#,
+        "",
         Ok(Some(FoundCrate::Name(name))) if name == "my_crate"
     }
 
@@ -357,6 +431,7 @@ mod tests {
             [dependencies]
             cool = { package = "my_crate", version = "0.1" }
         "#,
+        "",
         Ok(Some(FoundCrate::Name(name))) if name == "cool"
     }
 
@@ -367,6 +442,7 @@ mod tests {
             package = "my_crate"
             version = "0.1"
         "#,
+        "",
         Ok(Some(FoundCrate::Name(name))) if name == "cool"
     }
 
@@ -375,6 +451,7 @@ mod tests {
         r#"
             [dependencies]
         "#,
+        "",
         Ok(None)
     }
 
@@ -384,6 +461,7 @@ mod tests {
             [dependencies]
             serde = "1.0"
         "#,
+        "",
         Ok(None)
     }
 
@@ -393,6 +471,7 @@ mod tests {
             [target.'cfg(target_os="android")'.dependencies]
             my_crate = "0.1"
         "#,
+        "",
         Ok(Some(FoundCrate::Name(name))) if name == "my_crate"
     }
 
@@ -402,6 +481,7 @@ mod tests {
             [target.x86_64-pc-windows-gnu.dependencies]
             my_crate = "0.1"
         "#,
+        "",
         Ok(Some(FoundCrate::Name(name))) if name == "my_crate"
     }
 
@@ -411,6 +491,7 @@ mod tests {
             [package]
             name = "my_crate"
         "#,
+        "",
         Ok(Some(FoundCrate::Itself))
     }
 
@@ -423,6 +504,7 @@ mod tests {
             [dev-dependencies]
             my_crate = "0.1"
         "#,
+        "",
         Ok(Some(FoundCrate::Itself))
     }
 
@@ -433,6 +515,33 @@ mod tests {
             my_crate = { version = "0.5" }
             my-crate-old = { package = "my_crate", version = "0.1" }
         "#,
+        "",
         Ok(Some(FoundCrate::Name(name))) if name == "my_crate_old"
+    }
+
+    create_test! {
+        workspace_deps,
+        r#"
+            [dependencies]
+            my_crate_cool = { workspace = true }
+        "#,
+        r#"
+            [workspace.dependencies]
+            my_crate_cool = { package = "my_crate" }
+        "#,
+        Ok(Some(FoundCrate::Name(name))) if name == "my_crate_cool"
+    }
+
+    create_test! {
+        workspace_deps_twice_renamed,
+        r#"
+            [dependencies]
+            my_crate_cool_renamed = { package = "my-crate-cool", workspace = true }
+        "#,
+        r#"
+            [workspace.dependencies]
+            my-crate-cool = { package = "my_crate" }
+        "#,
+        Ok(Some(FoundCrate::Name(name))) if name == "my_crate_cool_renamed"
     }
 }
