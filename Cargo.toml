@@ -1,6 +1,6 @@
 [package]
 name = "proc-macro-crate"
-version = "2.0.0"
+version = "2.0.1"
 authors = ["Bastian Köcher <git@kchr.de>"]
 edition = "2021"
 categories = ["development-tools::procedural-macro-helpers"]
@@ -15,7 +15,7 @@ readme = "./README.md"
 rust-version = "1.66.0"
 
 [dependencies]
-toml_edit = "0.20.2"
+toml_edit = "=0.20.2"
 
 [dev-dependencies]
 quote = "1.0.33"
