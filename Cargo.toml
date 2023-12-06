@@ -16,6 +16,7 @@ rust-version = "1.66.0"
 
 [dependencies]
 toml_edit = "=0.20.2"
+toml_datetime = "=0.6.3"
 
 [dev-dependencies]
 quote = "1.0.33"
