@@ -96,6 +96,8 @@ use std::{
 
 use toml_edit::{Document, Item, Table, TomlError};
 
+mod toml_parser;
+
 /// Error type used by this crate.
 pub enum Error {
     NotFound(PathBuf),
