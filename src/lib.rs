@@ -213,7 +213,12 @@ pub fn crate_name(orig_name: &str) -> Result<FoundCrate, Error> {
             &cache_entry.crate_names
         },
         btree_map::Entry::Vacant(entry) => {
-            let workspace_manifest_path = workspace_manifest_path(&manifest_path)?;
+            // If `workspace_manifest_path` returns `None`, we are probably in a vendored deps
+            // folder and cargo complaining that we have some package inside a workspace, that isn't
+            // part of the workspace. In this case we just use the `manifest_path` as the
+            // `workspace_manifest_path`.
+            let workspace_manifest_path =
+                workspace_manifest_path(&manifest_path)?.unwrap_or_else(|| manifest_path.clone());
             let workspace_manifest_ts = cargo_toml_timestamp(&workspace_manifest_path)?;
 
             let cache_entry = entry.insert(read_cargo_toml(
@@ -235,7 +240,7 @@ pub fn crate_name(orig_name: &str) -> Result<FoundCrate, Error> {
         .clone())
 }
 
-fn workspace_manifest_path(cargo_toml_manifest: &Path) -> Result<PathBuf, Error> {
+fn workspace_manifest_path(cargo_toml_manifest: &Path) -> Result<Option<PathBuf>, Error> {
     let stdout = Command::new(env::var("CARGO").map_err(|_| Error::CargoEnvVariableNotSet)?)
         .arg("locate-project")
         .args(&["--workspace", "--message-format=plain"])
@@ -246,7 +251,15 @@ fn workspace_manifest_path(cargo_toml_manifest: &Path) -> Result<PathBuf, Error>
 
     String::from_utf8(stdout)
         .map_err(|_| Error::FailedGettingWorkspaceManifestPath)
-        .map(|s| s.trim().into())
+        .map(|s| {
+            let path = s.trim();
+
+            if path.is_empty() {
+                None
+            } else {
+                Some(path.into())
+            }
+        })
 }
 
 fn cargo_toml_timestamp(manifest_path: &Path) -> Result<SystemTime, Error> {
