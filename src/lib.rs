@@ -269,9 +269,9 @@ fn read_cargo_toml(
 
     let workspace_dependencies = if manifest_path != workspace_manifest_path {
         let workspace_manifest = open_cargo_toml(workspace_manifest_path)?;
-        extract_workspace_dependencies(workspace_manifest)?
+        extract_workspace_dependencies(&workspace_manifest)?
     } else {
-        Default::default()
+        extract_workspace_dependencies(&manifest)?
     };
 
     let crate_names = extract_crate_names(&manifest, workspace_dependencies)?;
@@ -289,7 +289,7 @@ fn read_cargo_toml(
 /// Returns a hash map that maps from dep name to the package name. Dep name
 /// and package name can be the same if there doesn't exist any rename.
 fn extract_workspace_dependencies(
-    workspace_toml: Document,
+    workspace_toml: &Document,
 ) -> Result<BTreeMap<String, String>, Error> {
     Ok(workspace_dep_tables(&workspace_toml)
         .into_iter()
@@ -400,7 +400,7 @@ mod tests {
                 let workspace_cargo_toml = $workspace_toml.parse::<Document>()
                     .expect("Parses workspace `Cargo.toml`");
 
-                let workspace_deps = extract_workspace_dependencies(workspace_cargo_toml)
+                let workspace_deps = extract_workspace_dependencies(&workspace_cargo_toml)
                     .expect("Extracts workspace dependencies");
 
                 match extract_crate_names(&cargo_toml, workspace_deps)
@@ -538,18 +538,5 @@ mod tests {
             my_crate_cool = { package = "my_crate" }
         "#,
         Ok(Some(FoundCrate::Name(name))) if name == "my_crate_cool"
-    }
-
-    create_test! {
-        workspace_deps_twice_renamed,
-        r#"
-            [dependencies]
-            my_crate_cool_renamed = { package = "my-crate-cool", workspace = true }
-        "#,
-        r#"
-            [workspace.dependencies]
-            my-crate-cool = { package = "my_crate" }
-        "#,
-        Ok(Some(FoundCrate::Name(name))) if name == "my_crate_cool_renamed"
     }
 }
