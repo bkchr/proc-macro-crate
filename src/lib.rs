@@ -352,7 +352,7 @@ fn extract_crate_names(
         let workspace = dep_value.get("workspace").and_then(|w| w.as_bool()).unwrap_or_default();
 
         let pkg_name = workspace
-            .then(|| workspace_dependencies.get(dep_name).map(|p| p.as_ref()))
+            .then(|| workspace_dependencies.get(pkg_name).map(|p| p.as_ref()))
             .flatten()
             .unwrap_or(pkg_name);
 
