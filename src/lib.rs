@@ -94,7 +94,7 @@ use std::{
     time::SystemTime,
 };
 
-use toml_edit::{Document, Item, Table, TomlError};
+use toml_edit::{DocumentMut, Item, Table, TomlError};
 
 /// Error type used by this crate.
 pub enum Error {
@@ -302,7 +302,7 @@ fn read_cargo_toml(
 /// Returns a hash map that maps from dep name to the package name. Dep name
 /// and package name can be the same if there doesn't exist any rename.
 fn extract_workspace_dependencies(
-    workspace_toml: &Document,
+    workspace_toml: &DocumentMut,
 ) -> Result<BTreeMap<String, String>, Error> {
     Ok(workspace_dep_tables(&workspace_toml)
         .into_iter()
@@ -316,7 +316,7 @@ fn extract_workspace_dependencies(
 }
 
 /// Return an iterator over all `[workspace.dependencies]`
-fn workspace_dep_tables(cargo_toml: &Document) -> Option<&Table> {
+fn workspace_dep_tables(cargo_toml: &DocumentMut) -> Option<&Table> {
     cargo_toml
         .get("workspace")
         .and_then(|w| w.as_table()?.get("dependencies")?.as_table())
@@ -328,16 +328,16 @@ fn sanitize_crate_name<S: AsRef<str>>(name: S) -> String {
 }
 
 /// Open the given `Cargo.toml` and parse it into a hashmap.
-fn open_cargo_toml(path: &Path) -> Result<Document, Error> {
+fn open_cargo_toml(path: &Path) -> Result<DocumentMut, Error> {
     let content = fs::read_to_string(path)
         .map_err(|e| Error::CouldNotRead { source: e, path: path.into() })?;
-    content.parse::<Document>().map_err(|e| Error::InvalidToml { source: e })
+    content.parse::<DocumentMut>().map_err(|e| Error::InvalidToml { source: e })
 }
 
 /// Extract all crate names from the given `Cargo.toml` by checking the `dependencies` and
 /// `dev-dependencies`.
 fn extract_crate_names(
-    cargo_toml: &Document,
+    cargo_toml: &DocumentMut,
     workspace_dependencies: BTreeMap<String, String>,
 ) -> Result<CrateNames, Error> {
     let package_name = extract_package_name(cargo_toml);
@@ -377,11 +377,11 @@ fn extract_crate_names(
     Ok(root_pkg.into_iter().chain(dep_pkgs).collect())
 }
 
-fn extract_package_name(cargo_toml: &Document) -> Option<&str> {
+fn extract_package_name(cargo_toml: &DocumentMut) -> Option<&str> {
     cargo_toml.get("package")?.get("name")?.as_str()
 }
 
-fn target_dep_tables(cargo_toml: &Document) -> impl Iterator<Item = &Table> {
+fn target_dep_tables(cargo_toml: &DocumentMut) -> impl Iterator<Item = &Table> {
     cargo_toml.get("target").into_iter().filter_map(Item::as_table).flat_map(|t| {
         t.iter().map(|(_, value)| value).filter_map(Item::as_table).flat_map(dep_tables)
     })
@@ -408,9 +408,9 @@ mod tests {
         ) => {
             #[test]
             fn $name() {
-                let cargo_toml = $cargo_toml.parse::<Document>()
+                let cargo_toml = $cargo_toml.parse::<DocumentMut>()
                     .expect("Parses `Cargo.toml`");
-                let workspace_cargo_toml = $workspace_toml.parse::<Document>()
+                let workspace_cargo_toml = $workspace_toml.parse::<DocumentMut>()
                     .expect("Parses workspace `Cargo.toml`");
 
                 let workspace_deps = extract_workspace_dependencies(&workspace_cargo_toml)
