@@ -408,11 +408,9 @@ mod tests {
         ) => {
             #[test]
             fn $name() {
-                let cargo_toml = $cargo_toml.parse::<DocumentMut
-                >()
+                let cargo_toml = $cargo_toml.parse::<DocumentMut>()
                     .expect("Parses `Cargo.toml`");
-                let workspace_cargo_toml = $workspace_toml.parse::<DocumentMut
-                >()
+                let workspace_cargo_toml = $workspace_toml.parse::<DocumentMut>()
                     .expect("Parses workspace `Cargo.toml`");
 
                 let workspace_deps = extract_workspace_dependencies(&workspace_cargo_toml)
