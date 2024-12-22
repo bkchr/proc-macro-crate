@@ -86,6 +86,7 @@ at your option.
 */
 
 use std::{
+    cmp::Ordering,
     collections::btree_map::{self, BTreeMap},
     env, fmt, fs, io,
     path::{Path, PathBuf},
@@ -94,7 +95,10 @@ use std::{
     time::SystemTime,
 };
 
-use toml_edit::{DocumentMut, Item, Table, TomlError};
+use tomling::{
+    cargo::{Dependencies, Dependency, Manifest},
+    from_str, Error as TomlError,
+};
 
 /// Error type used by this crate.
 pub enum Error {
@@ -125,8 +129,9 @@ impl fmt::Debug for Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::NotFound(path) =>
-                write!(f, "Could not find `Cargo.toml` in manifest dir: `{}`.", path.display()),
+            Error::NotFound(path) => {
+                write!(f, "Could not find `Cargo.toml` in manifest dir: `{}`.", path.display())
+            },
             Error::CargoManifestDirNotSet =>
                 f.write_str("`CARGO_MANIFEST_DIR` env variable not set."),
             Error::CouldNotRead { path, .. } => write!(f, "Could not read `{}`.", path.display()),
@@ -280,10 +285,12 @@ fn read_cargo_toml(
     manifest_ts: SystemTime,
     workspace_manifest_ts: SystemTime,
 ) -> Result<CacheEntry, Error> {
-    let manifest = open_cargo_toml(manifest_path)?;
+    let content = open_cargo_toml(manifest_path)?;
+    let manifest = parse_cargo_toml(&content)?;
 
     let workspace_dependencies = if manifest_path != workspace_manifest_path {
-        let workspace_manifest = open_cargo_toml(workspace_manifest_path)?;
+        let content = open_cargo_toml(workspace_manifest_path)?;
+        let workspace_manifest = parse_cargo_toml(&content)?;
         extract_workspace_dependencies(&workspace_manifest)?
     } else {
         extract_workspace_dependencies(&manifest)?
@@ -304,24 +311,20 @@ fn read_cargo_toml(
 /// Returns a hash map that maps from dep name to the package name. Dep name
 /// and package name can be the same if there doesn't exist any rename.
 fn extract_workspace_dependencies(
-    workspace_toml: &DocumentMut,
+    workspace_toml: &Manifest,
 ) -> Result<BTreeMap<String, String>, Error> {
-    Ok(workspace_dep_tables(&workspace_toml)
+    Ok(workspace_toml
+        .workspace()
+        .and_then(|w| w.dependencies())
+        .map(|d| d.iter())
         .into_iter()
         .flatten()
-        .map(move |(dep_name, dep_value)| {
-            let pkg_name = dep_value.get("package").and_then(|i| i.as_str()).unwrap_or(dep_name);
+        .map(move |(dep_name, dep)| {
+            let pkg_name = dep.package().unwrap_or(dep_name);
 
             (dep_name.to_owned(), pkg_name.to_owned())
         })
         .collect())
-}
-
-/// Return an iterator over all `[workspace.dependencies]`
-fn workspace_dep_tables(cargo_toml: &DocumentMut) -> Option<&Table> {
-    cargo_toml
-        .get("workspace")
-        .and_then(|w| w.as_table()?.get("dependencies")?.as_table())
 }
 
 /// Make sure that the given crate name is a valid rust identifier.
@@ -329,17 +332,20 @@ fn sanitize_crate_name<S: AsRef<str>>(name: S) -> String {
     name.as_ref().replace('-', "_")
 }
 
+/// Open the given `Cargo.toml` file and read it's content as a string.
+fn open_cargo_toml(path: &Path) -> Result<String, Error> {
+    fs::read_to_string(path).map_err(|e| Error::CouldNotRead { source: e, path: path.into() })
+}
+
 /// Open the given `Cargo.toml` and parse it into a hashmap.
-fn open_cargo_toml(path: &Path) -> Result<DocumentMut, Error> {
-    let content = fs::read_to_string(path)
-        .map_err(|e| Error::CouldNotRead { source: e, path: path.into() })?;
-    content.parse::<DocumentMut>().map_err(|e| Error::InvalidToml { source: e })
+fn parse_cargo_toml(content: &str) -> Result<Manifest<'_>, Error> {
+    from_str(content).map_err(|e| Error::InvalidToml { source: e })
 }
 
 /// Extract all crate names from the given `Cargo.toml` by checking the `dependencies` and
 /// `dev-dependencies`.
 fn extract_crate_names(
-    cargo_toml: &DocumentMut,
+    cargo_toml: &Manifest,
     workspace_dependencies: BTreeMap<String, String>,
 ) -> Result<CrateNames, Error> {
     let package_name = extract_package_name(cargo_toml);
@@ -355,16 +361,16 @@ fn extract_crate_names(
     });
 
     let dep_tables = dep_tables(cargo_toml).chain(target_dep_tables(cargo_toml));
-    let dep_pkgs = dep_tables.flatten().filter_map(move |(dep_name, dep_value)| {
-        let pkg_name = dep_value.get("package").and_then(|i| i.as_str()).unwrap_or(dep_name);
+    let dep_pkgs = dep_tables.filter_map(move |(dep_name, dep)| {
+        let pkg_name = dep.package().unwrap_or(dep_name);
 
         // We already handle this via `root_pkg` above.
         if package_name.as_ref().map_or(false, |n| *n == pkg_name) {
-            return None
+            return None;
         }
 
         // Check if this is a workspace dependency.
-        let workspace = dep_value.get("workspace").and_then(|w| w.as_bool()).unwrap_or_default();
+        let workspace = dep.workspace().unwrap_or_default();
 
         let pkg_name = workspace
             .then(|| workspace_dependencies.get(pkg_name).map(|p| p.as_ref()))
@@ -379,22 +385,42 @@ fn extract_crate_names(
     Ok(root_pkg.into_iter().chain(dep_pkgs).collect())
 }
 
-fn extract_package_name(cargo_toml: &DocumentMut) -> Option<&str> {
-    cargo_toml.get("package")?.get("name")?.as_str()
+fn extract_package_name<'c>(cargo_toml: &'c Manifest) -> Option<&'c str> {
+    cargo_toml.package().map(|p| p.name())
 }
 
-fn target_dep_tables(cargo_toml: &DocumentMut) -> impl Iterator<Item = &Table> {
-    cargo_toml.get("target").into_iter().filter_map(Item::as_table).flat_map(|t| {
-        t.iter().map(|(_, value)| value).filter_map(Item::as_table).flat_map(dep_tables)
+fn target_dep_tables<'c>(
+    cargo_toml: &'c Manifest,
+) -> impl Iterator<Item = (&'c str, &'c Dependency<'c>)> {
+    cargo_toml.targets().into_iter().flat_map(|t| {
+        t.iter()
+            .map(|(_, t)| t)
+            .flat_map(|t| combined_dep_tables(t.dependencies(), t.dev_dependencies()))
     })
 }
 
-fn dep_tables(table: &Table) -> impl Iterator<Item = &Table> {
-    table
-        .get("dependencies")
+fn dep_tables<'c>(cargo_toml: &'c Manifest) -> impl Iterator<Item = (&'c str, &'c Dependency<'c>)> {
+    combined_dep_tables(cargo_toml.dependencies(), cargo_toml.dev_dependencies())
+}
+
+fn combined_dep_tables<'c>(
+    deps: Option<&'c Dependencies<'c>>,
+    dev_deps: Option<&'c Dependencies<'c>>,
+) -> impl Iterator<Item = (&'c str, &'c Dependency<'c>)> {
+    let mut deps = deps
         .into_iter()
-        .chain(table.get("dev-dependencies"))
-        .filter_map(Item::as_table)
+        .flat_map(|deps| deps.iter())
+        .chain(dev_deps.into_iter().flat_map(|deps| deps.iter()))
+        .collect::<Vec<_>>();
+    // Ensure renames (i-e deps with `package` key) are listed the last.
+    deps.sort_by(|(_, a), (_, b)| match (a.package(), b.package()) {
+        (Some(a), Some(b)) => a.cmp(b),
+        (Some(_), None) => Ordering::Greater,
+        (None, Some(_)) => Ordering::Less,
+        (None, None) => Ordering::Equal,
+    });
+
+    deps.into_iter()
 }
 
 #[cfg(test)]
@@ -410,16 +436,18 @@ mod tests {
         ) => {
             #[test]
             fn $name() {
-                let cargo_toml = $cargo_toml.parse::<DocumentMut>()
+                let cargo_toml = from_str($cargo_toml)
                     .expect("Parses `Cargo.toml`");
-                let workspace_cargo_toml = $workspace_toml.parse::<DocumentMut>()
+                let workspace_cargo_toml =  from_str($workspace_toml)
                     .expect("Parses workspace `Cargo.toml`");
 
                 let workspace_deps = extract_workspace_dependencies(&workspace_cargo_toml)
                     .expect("Extracts workspace dependencies");
 
                 match extract_crate_names(&cargo_toml, workspace_deps)
-                    .map(|mut map| map.remove("my_crate"))
+                    .map(|mut map| {
+                        map.remove("my_crate")
+                    })
                 {
                    $( $result )* => (),
                    o => panic!("Invalid result: {:?}", o),
