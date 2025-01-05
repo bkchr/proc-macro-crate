@@ -100,7 +100,6 @@ use toml_edit::{DocumentMut, Item, Table, TomlError};
 pub enum Error {
     NotFound(PathBuf),
     CargoManifestDirNotSet,
-    CargoEnvVariableNotSet,
     FailedGettingWorkspaceManifestPath,
     CouldNotRead { path: PathBuf, source: io::Error },
     InvalidToml { source: TomlError },
@@ -138,7 +137,6 @@ impl fmt::Display for Error {
                 crate_name,
                 path.display(),
             ),
-            Error::CargoEnvVariableNotSet => f.write_str("`CARGO` env variable not set."),
             Error::FailedGettingWorkspaceManifestPath =>
                 f.write_str("Failed to get the path of the workspace manifest path."),
         }
@@ -241,7 +239,11 @@ pub fn crate_name(orig_name: &str) -> Result<FoundCrate, Error> {
 }
 
 fn workspace_manifest_path(cargo_toml_manifest: &Path) -> Result<Option<PathBuf>, Error> {
-    let stdout = Command::new(env::var("CARGO").map_err(|_| Error::CargoEnvVariableNotSet)?)
+    let Ok(cargo) = env::var("CARGO") else {
+        return Ok(None);
+    };
+
+    let stdout = Command::new(cargo)
         .arg("locate-project")
         .args(&["--workspace", "--message-format=plain"])
         .arg(format!("--manifest-path={}", cargo_toml_manifest.display()))
