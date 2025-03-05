@@ -1,0 +1,4 @@
+disallowed-methods = [
+    { path = "toml_edit::Item::as_table", reason = "Use .as_table_like instead!" },
+    { path = "toml_edit::Item::is_table", reason = "Use .is_table_like instead!" },
+]
