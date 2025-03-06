@@ -356,26 +356,28 @@ fn extract_crate_names(
     });
 
     let dep_tables = dep_tables(cargo_toml.as_table()).chain(target_dep_tables(cargo_toml));
-    let dep_pkgs = dep_tables.map(|t| t.iter()).flatten().filter_map(move |(dep_name, dep_value)| {
-        let pkg_name = dep_value.get("package").and_then(|i| i.as_str()).unwrap_or(dep_name);
+    let dep_pkgs =
+        dep_tables.map(|t| t.iter()).flatten().filter_map(move |(dep_name, dep_value)| {
+            let pkg_name = dep_value.get("package").and_then(|i| i.as_str()).unwrap_or(dep_name);
 
-        // We already handle this via `root_pkg` above.
-        if package_name.as_ref().map_or(false, |n| *n == pkg_name) {
-            return None
-        }
+            // We already handle this via `root_pkg` above.
+            if package_name.as_ref().map_or(false, |n| *n == pkg_name) {
+                return None
+            }
 
-        // Check if this is a workspace dependency.
-        let workspace = dep_value.get("workspace").and_then(|w| w.as_bool()).unwrap_or_default();
+            // Check if this is a workspace dependency.
+            let workspace =
+                dep_value.get("workspace").and_then(|w| w.as_bool()).unwrap_or_default();
 
-        let pkg_name = workspace
-            .then(|| workspace_dependencies.get(pkg_name).map(|p| p.as_ref()))
-            .flatten()
-            .unwrap_or(pkg_name);
+            let pkg_name = workspace
+                .then(|| workspace_dependencies.get(pkg_name).map(|p| p.as_ref()))
+                .flatten()
+                .unwrap_or(pkg_name);
 
-        let cr = FoundCrate::Name(sanitize_crate_name(dep_name));
+            let cr = FoundCrate::Name(sanitize_crate_name(dep_name));
 
-        Some((pkg_name.to_owned(), cr))
-    });
+            Some((pkg_name.to_owned(), cr))
+        });
 
     Ok(root_pkg.into_iter().chain(dep_pkgs).collect())
 }
@@ -385,9 +387,16 @@ fn extract_package_name(cargo_toml: &DocumentMut) -> Option<&str> {
 }
 
 fn target_dep_tables(cargo_toml: &DocumentMut) -> impl Iterator<Item = &dyn TableLike> {
-    cargo_toml.get("target").into_iter().filter_map(Item::as_table_like).flat_map(|t| {
-        t.iter().map(|(_, value)| value).filter_map(Item::as_table_like).flat_map(dep_tables)
-    })
+    cargo_toml
+        .get("target")
+        .into_iter()
+        .filter_map(Item::as_table_like)
+        .flat_map(|t| {
+            t.iter()
+                .map(|(_, value)| value)
+                .filter_map(Item::as_table_like)
+                .flat_map(dep_tables)
+        })
 }
 
 fn dep_tables(table: &dyn TableLike) -> impl Iterator<Item = &dyn TableLike> {
