@@ -44,7 +44,7 @@ jobs:
     - uses: Swatinem/rust-cache@v2
     - name: Check formatting
       run: cargo fmt --all -- --check
-  test:
+  clippy:
     name: cargo clippy (forbidden methods)
     runs-on: ubuntu-latest
     steps:
