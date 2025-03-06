@@ -439,6 +439,16 @@ mod tests {
         Ok(Some(FoundCrate::Name(name))) if name == "my_crate"
     }
 
+    // forbidding toml_edit::Item::as_table ought to mean this is OK, but let's have a test too
+    create_test! {
+        deps_with_crate_inline_table,
+        r#"
+            dependencies = { my_crate = "0.1" }
+        "#,
+        "",
+        Ok(Some(FoundCrate::Name(name))) if name == "my_crate"
+    }
+
     create_test! {
         dev_deps_with_crate,
         r#"
