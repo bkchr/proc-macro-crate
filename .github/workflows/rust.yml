@@ -44,3 +44,12 @@ jobs:
     - uses: Swatinem/rust-cache@v2
     - name: Check formatting
       run: cargo fmt --all -- --check
+  clippy:
+    name: cargo clippy (forbidden methods)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: dtolnay/rust-toolchain@stable
+      # We just use clippy to spot forbidden methods.
+      # We disable the default lint set which has much questionable output.
+      - run: cargo clippy --all -- -A clippy::all -D clippy::disallowed_methods
