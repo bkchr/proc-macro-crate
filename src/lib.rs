@@ -174,10 +174,9 @@ type CrateNames = BTreeMap<String, FoundCrate>;
 ///
 /// # Returns
 ///
-/// - `Ok(orig_name)` if the crate was found, but not renamed in the `Cargo.toml`.
-/// - `Ok(RENAMED)` if the crate was found, but is renamed in the `Cargo.toml`. `RENAMED` will be
-/// the renamed name.
-/// - `Err` if an error occurred.
+/// - `Ok(FoundCrate::Itself)` the searched crate is the current crate being compiled.
+/// - `Ok(FoundCrate::Name(new_name))` the searched create was found with the given name in the `Cargo.toml`.
+/// - `Err` if an error occurred. See [`Error`].
 ///
 /// The returned crate name is sanitized in such a way that it is a valid rust identifier. Thus,
 /// it is ready to be used in `extern crate` as identifier.
