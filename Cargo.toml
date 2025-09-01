@@ -15,7 +15,7 @@ readme = "./README.md"
 rust-version = "1.67.0"
 
 [dependencies]
-toml_edit = { version = "0.22.24", default-features = false, features = [
+toml_edit = { version = "0.23.2", default-features = false, features = [
     "parse",
 ] }
 
