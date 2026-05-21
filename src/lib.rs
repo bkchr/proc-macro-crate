@@ -94,6 +94,10 @@ use std::{
     time::SystemTime,
 };
 
+#[cfg(feature = "to_tokens")]
+use proc_macro2::{Ident, Span, TokenStream};
+#[cfg(feature = "to_tokens")]
+use quote::{quote, ToTokens};
 use toml_edit::{DocumentMut, Item, TableLike, TomlError};
 
 /// Error type used by this crate.
@@ -150,6 +154,22 @@ pub enum FoundCrate {
     Itself,
     /// The searched crate was found with this name.
     Name(String),
+}
+
+#[cfg(feature = "to_tokens")]
+impl ToTokens for FoundCrate {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        match self {
+            Self::Itself => {
+                quote!(crate)
+            },
+            Self::Name(name) => {
+                let name = Ident::new_raw(name, Span::call_site());
+                quote!(::#name)
+            },
+        }
+        .to_tokens(tokens);
+    }
 }
 
 // In a rustc invocation, there will only ever be one entry in this map, since every crate is
@@ -573,5 +593,20 @@ mod tests {
             my_crate_cool = { package = "my_crate" }
         "#,
         Ok(Some(FoundCrate::Name(name))) if name == "my_crate_cool"
+    }
+
+    #[cfg(feature = "to_tokens")]
+    #[test]
+    fn itself_to_tokens() {
+        assert_eq!(quote!(crate).to_string(), FoundCrate::Itself.into_token_stream().to_string());
+    }
+
+    #[cfg(feature = "to_tokens")]
+    #[test]
+    fn name_to_tokens() {
+        assert_eq!(
+            quote!(::r#my_crate).to_string(),
+            FoundCrate::Name("my_crate".to_string()).into_token_stream().to_string()
+        );
     }
 }
