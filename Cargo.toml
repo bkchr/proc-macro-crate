@@ -15,9 +15,7 @@ readme = "./README.md"
 rust-version = "1.82.0"
 
 [dependencies]
-toml_edit = { version = "0.25.0", default-features = false, features = [
-    "parse",
-] }
+toml-span = { version = "0.7.1", default-features = false }
 
 [dev-dependencies]
 quote = "1.0.39"

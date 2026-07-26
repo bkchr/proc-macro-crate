@@ -86,6 +86,7 @@ at your option.
 */
 
 use std::{
+    borrow::Borrow,
     collections::btree_map::{self, BTreeMap},
     env, fmt, fs, io,
     path::{Path, PathBuf},
@@ -94,7 +95,11 @@ use std::{
     time::SystemTime,
 };
 
-use toml_edit::{DocumentMut, Item, TableLike, TomlError};
+use toml_span::{
+    de::parse,
+    value::{Table, ValueInner},
+    Error as TomlError,
+};
 
 /// Error type used by this crate.
 pub enum Error {
@@ -280,10 +285,12 @@ fn read_cargo_toml(
     manifest_ts: SystemTime,
     workspace_manifest_ts: SystemTime,
 ) -> Result<CacheEntry, Error> {
-    let manifest = open_cargo_toml(manifest_path)?;
+    let manifest_content = read_cargo_toml_to_string(manifest_path)?;
+    let manifest = parse_cargo_toml(&manifest_content)?;
 
     let workspace_dependencies = if manifest_path != workspace_manifest_path {
-        let workspace_manifest = open_cargo_toml(workspace_manifest_path)?;
+        let workspace_manifest_content = read_cargo_toml_to_string(workspace_manifest_path)?;
+        let workspace_manifest = parse_cargo_toml(&workspace_manifest_content)?;
         extract_workspace_dependencies(&workspace_manifest)?
     } else {
         extract_workspace_dependencies(&manifest)?
@@ -304,25 +311,27 @@ fn read_cargo_toml(
 /// Returns a hash map that maps from dep name to the package name. Dep name
 /// and package name can be the same if there doesn't exist any rename.
 fn extract_workspace_dependencies(
-    workspace_toml: &DocumentMut,
+    workspace_toml: &Table<'_>,
 ) -> Result<BTreeMap<String, String>, Error> {
-    Ok(workspace_dep_tables(&workspace_toml)
+    Ok(workspace_dep_tables(workspace_toml)
         .into_iter()
-        .map(|t| t.iter())
-        .flatten()
+        .flat_map(|t| t.iter())
         .map(move |(dep_name, dep_value)| {
-            let pkg_name = dep_value.get("package").and_then(|i| i.as_str()).unwrap_or(dep_name);
+            let pkg_name = dep_value
+                .as_table()
+                .and_then(|t| t.get("package").and_then(|i| i.as_str()))
+                .unwrap_or(dep_name.borrow());
 
-            (dep_name.to_owned(), pkg_name.to_owned())
+            (dep_name.to_string(), pkg_name.to_owned())
         })
         .collect())
 }
 
 /// Return an iterator over all `[workspace.dependencies]`
-fn workspace_dep_tables(cargo_toml: &DocumentMut) -> Option<&dyn TableLike> {
+fn workspace_dep_tables<'a>(cargo_toml: &'a Table<'a>) -> Option<&'a Table<'a>> {
     cargo_toml
         .get("workspace")
-        .and_then(|w| w.as_table_like()?.get("dependencies")?.as_table_like())
+        .and_then(|w| w.as_table()?.get("dependencies")?.as_table())
 }
 
 /// Make sure that the given crate name is a valid rust identifier.
@@ -330,17 +339,25 @@ fn sanitize_crate_name<S: AsRef<str>>(name: S) -> String {
     name.as_ref().replace('-', "_")
 }
 
-/// Open the given `Cargo.toml` and parse it into a hashmap.
-fn open_cargo_toml(path: &Path) -> Result<DocumentMut, Error> {
-    let content = fs::read_to_string(path)
-        .map_err(|e| Error::CouldNotRead { source: e, path: path.into() })?;
-    content.parse::<DocumentMut>().map_err(|e| Error::InvalidToml { source: e })
+/// Read the given `Cargo.toml`.
+fn read_cargo_toml_to_string(path: &Path) -> Result<String, Error> {
+    fs::read_to_string(path).map_err(|e| Error::CouldNotRead { source: e, path: path.into() })
+}
+
+/// Parse `Cargo.toml` content into a hashmap.
+fn parse_cargo_toml(content: &str) -> Result<Table<'_>, Error> {
+    let ValueInner::Table(parsed) =
+        parse(content).map_err(|source| Error::InvalidToml { source })?.take()
+    else {
+        unreachable!("the returned value is always a table")
+    };
+    Ok(parsed)
 }
 
 /// Extract all crate names from the given `Cargo.toml` by checking the `dependencies` and
 /// `dev-dependencies`.
 fn extract_crate_names(
-    cargo_toml: &DocumentMut,
+    cargo_toml: &Table,
     workspace_dependencies: BTreeMap<String, String>,
 ) -> Result<CrateNames, Error> {
     let package_name = extract_package_name(cargo_toml);
@@ -355,56 +372,58 @@ fn extract_crate_names(
         (name.to_string(), cr)
     });
 
-    let dep_tables = dep_tables(cargo_toml.as_table()).chain(target_dep_tables(cargo_toml));
-    let dep_pkgs =
-        dep_tables.map(|t| t.iter()).flatten().filter_map(move |(dep_name, dep_value)| {
-            let pkg_name = dep_value.get("package").and_then(|i| i.as_str()).unwrap_or(dep_name);
+    let dep_tables = dep_tables(cargo_toml).chain(target_dep_tables(cargo_toml));
+    let mut dep_entries = dep_tables.flat_map(|t| t.iter()).collect::<Vec<_>>();
+    dep_entries.sort_by_key(|(k, _)| k.span.start);
 
-            // We already handle this via `root_pkg` above.
-            if package_name.as_ref().map_or(false, |n| *n == pkg_name) {
-                return None
-            }
+    let dep_pkgs = dep_entries.into_iter().filter_map(move |(dep_name, dep_value)| {
+        let pkg_name = dep_value
+            .as_table()
+            .and_then(|t| t.get("package").and_then(|i| i.as_str()))
+            .unwrap_or(dep_name.borrow());
 
-            // Check if this is a workspace dependency.
-            let workspace =
-                dep_value.get("workspace").and_then(|w| w.as_bool()).unwrap_or_default();
+        // We already handle this via `root_pkg` above.
+        if package_name.as_ref().is_some_and(|n| *n == pkg_name) {
+            return None
+        }
 
-            let pkg_name = workspace
-                .then(|| workspace_dependencies.get(pkg_name).map(|p| p.as_ref()))
-                .flatten()
-                .unwrap_or(pkg_name);
+        // Check if this is a workspace dependency.
+        let workspace = dep_value
+            .as_table()
+            .and_then(|t| t.get("workspace").and_then(|w| w.as_bool()))
+            .unwrap_or_default();
 
-            let cr = FoundCrate::Name(sanitize_crate_name(dep_name));
+        let pkg_name = workspace
+            .then(|| workspace_dependencies.get(pkg_name).map(|p| p.as_ref()))
+            .flatten()
+            .unwrap_or(pkg_name);
 
-            Some((pkg_name.to_owned(), cr))
-        });
+        let cr = FoundCrate::Name(sanitize_crate_name(dep_name.to_string()));
+
+        Some((pkg_name.to_owned(), cr))
+    });
 
     Ok(root_pkg.into_iter().chain(dep_pkgs).collect())
 }
 
-fn extract_package_name(cargo_toml: &DocumentMut) -> Option<&str> {
-    cargo_toml.get("package")?.get("name")?.as_str()
+fn extract_package_name<'a>(cargo_toml: &'a Table<'a>) -> Option<&'a str> {
+    cargo_toml.get("package")?.as_table()?.get("name")?.as_str()
 }
 
-fn target_dep_tables(cargo_toml: &DocumentMut) -> impl Iterator<Item = &dyn TableLike> {
+fn target_dep_tables<'a>(cargo_toml: &'a Table<'a>) -> impl Iterator<Item = &'a Table<'a>> {
     cargo_toml
         .get("target")
         .into_iter()
-        .filter_map(Item::as_table_like)
-        .flat_map(|t| {
-            t.iter()
-                .map(|(_, value)| value)
-                .filter_map(Item::as_table_like)
-                .flat_map(dep_tables)
-        })
+        .filter_map(|v| v.as_table())
+        .flat_map(|t| t.values().filter_map(|value| value.as_table()).flat_map(dep_tables))
 }
 
-fn dep_tables(table: &dyn TableLike) -> impl Iterator<Item = &dyn TableLike> {
+fn dep_tables<'a>(table: &'a Table<'a>) -> impl Iterator<Item = &'a Table<'a>> {
     table
         .get("dependencies")
         .into_iter()
         .chain(table.get("dev-dependencies"))
-        .filter_map(Item::as_table_like)
+        .filter_map(|v| v.as_table())
 }
 
 #[cfg(test)]
@@ -420,15 +439,21 @@ mod tests {
         ) => {
             #[test]
             fn $name() {
-                let cargo_toml = $cargo_toml.parse::<DocumentMut>()
+                let cargo_toml = parse($cargo_toml)
                     .expect("Parses `Cargo.toml`");
-                let workspace_cargo_toml = $workspace_toml.parse::<DocumentMut>()
+                let cargo_toml_table = cargo_toml
+                    .as_table()
+                    .expect("`Cargo.toml` content is a TOML table");
+                let workspace_cargo_toml = parse($workspace_toml)
                     .expect("Parses workspace `Cargo.toml`");
+                let workspace_cargo_toml_table = workspace_cargo_toml
+                    .as_table()
+                    .expect("`Workspace `Cargo.toml` conten is a TOML table");
 
-                let workspace_deps = extract_workspace_dependencies(&workspace_cargo_toml)
+                let workspace_deps = extract_workspace_dependencies(&workspace_cargo_toml_table)
                     .expect("Extracts workspace dependencies");
 
-                match extract_crate_names(&cargo_toml, workspace_deps)
+                match extract_crate_names(&cargo_toml_table, workspace_deps)
                     .map(|mut map| map.remove("my_crate"))
                 {
                    $( $result )* => (),
