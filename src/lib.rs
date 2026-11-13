@@ -240,7 +240,9 @@ pub fn crate_name(orig_name: &str) -> Result<FoundCrate, Error> {
 
 fn workspace_manifest_path(cargo_toml_manifest: &Path) -> Result<Option<PathBuf>, Error> {
     let Ok(cargo) = env::var("CARGO") else {
-        return Ok(None);
+        // Non-Cargo build systems (Buck2, Bazel, …) don't set `CARGO`, so
+        // `cargo locate-project` can't be run. Walk up to the `[workspace]` manifest.
+        return Ok(find_workspace_manifest(cargo_toml_manifest));
     };
 
     let stdout = Command::new(cargo)
@@ -262,6 +264,24 @@ fn workspace_manifest_path(cargo_toml_manifest: &Path) -> Result<Option<PathBuf>
                 Some(path.into())
             }
         })
+}
+
+/// Walk up from a crate manifest to the nearest ancestor `Cargo.toml` declaring a
+/// `[workspace]`. Fallback for build systems that don't set `CARGO` (no
+/// `cargo locate-project`); `None` if none is found.
+fn find_workspace_manifest(cargo_toml_manifest: &Path) -> Option<PathBuf> {
+    let mut dir = cargo_toml_manifest.parent()?;
+    loop {
+        let candidate = dir.join("Cargo.toml");
+        if fs::read_to_string(&candidate)
+            .ok()
+            .and_then(|c| c.parse::<DocumentMut>().ok())
+            .is_some_and(|doc| doc.get("workspace").is_some())
+        {
+            return Some(candidate);
+        }
+        dir = dir.parent()?;
+    }
 }
 
 fn cargo_toml_timestamp(manifest_path: &Path) -> Result<SystemTime, Error> {
